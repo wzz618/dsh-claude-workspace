@@ -35,6 +35,7 @@ if (requestedScenario === 'die' || requestedScenario === 'die-pending') {
 }
 const sessions = new Map()
 const activePrompts = new Map()
+const planEmitted = new Set()
 let nextServerId = 1000
 let sessionCounter = 0
 const pendingServer = new Map()
@@ -185,6 +186,18 @@ function startPrompt(promptId, sessionId) {
     } else {
       setTimeout(() => process.exit(0), 400)
     }
+    return
+  }
+  if (scenario === 'plan' && !planEmitted.has(sessionId)) {
+    planEmitted.add(sessionId)
+    notify(sessionId, {
+      sessionUpdate: 'plan',
+      entries: [
+        { content: 'inspect the repository', priority: 'high', status: 'completed' },
+        { content: 'write the patch', priority: 'medium', status: 'pending' },
+      ],
+    })
+    finishPrompt(promptId, { stopReason: 'end_turn' })
     return
   }
   if (scenario === 'slow') {

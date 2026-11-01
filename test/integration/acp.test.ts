@@ -232,6 +232,41 @@ test('health check performs a real handshake and session creation', async () => 
   }
 })
 
+test('plan updates are recorded and decidable', async () => {
+  const context = await setup('plan')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const outcome = await context.service.prompt({ dshSessionId: 'dsh-1', text: 'plan this' })
+    assert.equal(outcome.stopReason, 'end_turn')
+    const plan = await waitForAsync(async () => context.service.plan('dsh-1'))
+    assert.equal(plan.entries.length, 2)
+    assert.equal(plan.entries[1]!.content, 'write the patch')
+
+    const approved = await context.service.decidePlan('dsh-1', { kind: 'approve' })
+    assert.equal(approved.decision!.kind, 'approve')
+    const cancelled = await context.service.decidePlan('dsh-1', { kind: 'cancel' })
+    assert.equal(cancelled.decision!.kind, 'cancel')
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('revising a plan sends the feedback as a new prompt', async () => {
+  const context = await setup('plan')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    await context.service.prompt({ dshSessionId: 'dsh-1', text: 'plan this' })
+    await waitForAsync(async () => context.service.plan('dsh-1'))
+    const revised = await context.service.decidePlan('dsh-1', { kind: 'revise', feedback: 'change step 2' })
+    assert.equal(revised.decision!.kind, 'revise')
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending.requestId, 'reject-once')
+    await waitForAsync(async () => context.service.pendingApprovals('dsh-1').length === 0 ? true : undefined)
+  } finally {
+    await context.cleanup()
+  }
+})
+
 test('two sessions in one workspace route permission requests independently', async () => {
   const context = await setup('perm')
   try {

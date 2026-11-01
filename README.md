@@ -181,7 +181,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ```sh
 npm install
 npm run typecheck      # src + test
-npm test               # 131 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
+npm test               # 133 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
 npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run test:real:plugin  # 隔离 DSH_HOME 的安装/卸载残留检查
