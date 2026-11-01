@@ -1,5 +1,6 @@
 import { CcwConfigError, resolveConfig, type CcwConfigInput } from './config.ts'
 import { registerCcwHttp, type ExactRoute } from './http.ts'
+import { seedNativeAgent } from './native/agents-file.ts'
 import { createService } from './service.ts'
 import type { WorkspaceControllerLike } from './workspace/registry.ts'
 
@@ -64,6 +65,17 @@ export function apply(ctx: CordisContext, config: CcwConfigInput = {}): void {
     ...(controller === undefined ? {} : { workspaceController: controller }),
     ...(services === undefined ? {} : { services }),
   })
+
+  // The native entry needs the adapter's agent table; the local host config
+  // supplies its executable. Runs at load, before the adapter row reads the
+  // table in the shipped bundle order; `native.seedAgentsFile` opts out.
+  const seeded = seedNativeAgent(service.config)
+  service.recordNativeSeed(seeded)
+  if (seeded.status === 'created') {
+    ctx.logger?.('dsh-claude-workspace').info(`native Claude entry added to ${seeded.path}`)
+  } else if (seeded.status === 'failed') {
+    ctx.logger?.('dsh-claude-workspace').warn(`native Claude entry was not seeded: ${seeded.reason}`)
+  }
 
   // The workspace controller commonly loads after this row; attach when it
   // appears so workspaces created earlier are registered too.

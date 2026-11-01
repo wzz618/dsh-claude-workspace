@@ -104,6 +104,7 @@ async function dispatch(
           provider: service.config.native.provider,
           model: service.config.native.model,
           permissionPreset: service.config.native.permissionPreset,
+          seed: service.nativeSeed ?? null,
         },
         approvalsTimeoutMs: service.config.approvals.timeoutMs,
         acp: {

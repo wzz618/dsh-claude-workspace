@@ -57,6 +57,7 @@ test('serves status, creates workspaces, and reports validation errors', async (
       provider: 'acp-claude-code',
       model: 'default',
       permissionPreset: 'danger-full-access',
+      seed: null,
     })
 
     const created = await jsonOf(await fetch(`${http.base}/workspaces/create`, {

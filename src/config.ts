@@ -94,6 +94,10 @@ export interface ResolvedConfig {
     readonly permissionPreset: string
     /** Attach the new session to its DSH workspace so the sidebar shows it. */
     readonly attachToWorkspace: boolean
+    /** ACP adapter agent table; the local host is offered here when seeding is on. */
+    readonly agentsFile: string
+    /** Add the local host's agent entry when the file has no such id. */
+    readonly seedAgentsFile: boolean
   }
 }
 
@@ -155,6 +159,8 @@ export interface CcwConfigInput {
     model?: string
     permissionPreset?: string
     attachToWorkspace?: boolean
+    agentsFile?: string
+    seedAgentsFile?: boolean
   }
 }
 
@@ -279,12 +285,14 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
   }
   if (logsConfig.files > 10) issues.push('logs.files must be 10 or fewer')
 
-  const nativeRaw = section(raw.native, ['provider', 'model', 'permissionPreset', 'attachToWorkspace'], 'native', issues)
+  const nativeRaw = section(raw.native, ['provider', 'model', 'permissionPreset', 'attachToWorkspace', 'agentsFile', 'seedAgentsFile'], 'native', issues)
   const nativeConfig = {
     provider: stringField(nativeRaw.provider, 'acp-claude-code', 'native.provider', issues),
     model: stringField(nativeRaw.model, 'default', 'native.model', issues),
     permissionPreset: stringField(nativeRaw.permissionPreset, 'danger-full-access', 'native.permissionPreset', issues),
     attachToWorkspace: booleanField(nativeRaw.attachToWorkspace, true, 'native.attachToWorkspace', issues),
+    agentsFile: pathField(nativeRaw.agentsFile, join(home, 'dsh-acp', 'agents.json'), 'native.agentsFile', env, issues),
+    seedAgentsFile: booleanField(nativeRaw.seedAgentsFile, true, 'native.seedAgentsFile', issues),
   }
 
   if (issues.length > 0) throw new CcwConfigError(issues)

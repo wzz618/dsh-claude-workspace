@@ -23,6 +23,7 @@ import { findAllowOnce, findAllowWithUpdates, findReject, isHighRiskCommand, nor
 import { buildWidenRules, describeTool, matchesWidenedRule } from './gate/widen.ts'
 import { createHostOps } from './host/index.ts'
 import type { DirectoryEntry, HostOps } from './host/types.ts'
+import type { AgentSeedResult } from './native/agents-file.ts'
 import { NativeSessionBridge, type NativeSessionResult, type ServiceLookup } from './native/bridge.ts'
 import { CcwError, tail } from './util/errors.ts'
 import {
@@ -151,6 +152,7 @@ export class CcwService {
   readonly #auditReady: Promise<unknown>
   readonly #settings: SettingsWriter
   readonly #native: NativeSessionBridge | undefined
+  #nativeSeed: AgentSeedResult | undefined
   readonly #home: string
   readonly #now: () => number
   readonly #newId: () => string
@@ -227,6 +229,19 @@ export class CcwService {
   /** True when the native Claude-session entry can reach the DSH Agent service. */
   get nativeAvailable(): boolean {
     return this.#native?.available === true
+  }
+
+  /** Latest result of offering the local host to the ACP adapter's agent table. */
+  get nativeSeed(): AgentSeedResult | undefined {
+    return this.#nativeSeed
+  }
+
+  /**
+   * Record the startup agent-table seeding result for diagnostics.
+   * @param result - outcome produced by {@link seedNativeAgent}.
+   */
+  recordNativeSeed(result: AgentSeedResult): void {
+    this.#nativeSeed = result
   }
 
   /**

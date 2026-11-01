@@ -20,17 +20,19 @@ test('defaults resolve to a local host and a data directory under DSH_HOME', () 
     model: 'default',
     permissionPreset: 'danger-full-access',
     attachToWorkspace: true,
+    agentsFile: '/tmp/dsh-home/dsh-acp/agents.json',
+    seedAgentsFile: true,
   })
 })
 
 test('native entry configuration is validated', () => {
   const config = resolveConfig({ native: { provider: 'acp-other', model: 'sonnet', permissionPreset: 'workspace-write', attachToWorkspace: false } })
-  assert.deepEqual(config.native, {
-    provider: 'acp-other',
-    model: 'sonnet',
-    permissionPreset: 'workspace-write',
-    attachToWorkspace: false,
-  })
+  assert.equal(config.native.provider, 'acp-other')
+  assert.equal(config.native.model, 'sonnet')
+  assert.equal(config.native.permissionPreset, 'workspace-write')
+  assert.equal(config.native.attachToWorkspace, false)
+  assert.equal(config.native.agentsFile.endsWith('/dsh-acp/agents.json'), true)
+  assert.equal(config.native.seedAgentsFile, true)
   assert.throws(() => resolveConfig({ native: { bogus: true } as never }), /native.bogus/)
   assert.throws(() => resolveConfig({ native: { attachToWorkspace: 'yes' as never } }), /native.attachToWorkspace/)
 })

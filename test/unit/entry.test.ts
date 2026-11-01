@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { apply, Config, inject, name } from '../../src/index.ts'
 import { CCW_HTTP_PATHS, type ExactRoute } from '../../src/http.ts'
@@ -39,7 +40,7 @@ test('apply registers every HTTP route and disposes the service', async () => {
       },
       logger: () => ({ info: () => undefined, warn: () => undefined, error: () => undefined }),
     }
-    apply(ctx, { dataDir, workspaces: { baseDir: join(dataDir, 'workspaces') } })
+    apply(ctx, { dataDir, workspaces: { baseDir: join(dataDir, 'workspaces') }, native: { seedAgentsFile: false } })
     assert.equal(routes.length, CCW_HTTP_PATHS.length)
     assert.deepEqual(routes.map((route) => route.path), [...CCW_HTTP_PATHS])
     assert.ok(routes.every((route) => route.kind === 'exact'))
@@ -62,8 +63,24 @@ test('apply works without a web server and without a workspace controller', asyn
         error: () => undefined,
       }),
     }
-    apply(ctx, { dataDir })
+    apply(ctx, { dataDir, native: { seedAgentsFile: false } })
     assert.ok(warnings.some((message) => message.includes('webServer')))
+  } finally {
+    await removeTempDir(dataDir)
+  }
+})
+
+test('apply offers the local host to the ACP adapter agent table', async () => {
+  const dataDir = await makeTempDir()
+  try {
+    const agentsFile = join(dataDir, 'dsh-acp', 'agents.json')
+    const ctx = { get: () => undefined, logger: () => ({ info: () => undefined, warn: () => undefined, error: () => undefined }) }
+    apply(ctx, { dataDir, native: { agentsFile, seedAgentsFile: true } })
+    const document = JSON.parse(await readFile(agentsFile, 'utf8')) as {
+      agents: Record<string, { command: string; args: string[] }>
+    }
+    assert.equal(document.agents['claude-code']!.command, 'claude-agent-acp')
+    assert.deepEqual(document.agents['claude-code']!.args, [])
   } finally {
     await removeTempDir(dataDir)
   }

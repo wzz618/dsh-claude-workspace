@@ -168,6 +168,12 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
   `ctx.agents.create()`，挂到 DSH 工作区，写入 `native.permissionPreset`，
   返回 sessionId；客户端用 `uiWorkspace.openSession()` 直接打开原生会话。
   配置见 `native.provider/model/permissionPreset/attachToWorkspace`。
+- **agents.json 由本地 host 配置补齐**：插件加载时把 `hosts.<local>` 的
+  `executable/args/env` 写进 `native.agentsFile`（默认
+  `$DSH_HOME/dsh-acp/agents.json`），已存在的同名 agent 不覆盖；可用
+  `native.seedAgentsFile: false` 关闭。结果通过 `/status` 的 `native.seed`
+  报告（`created/present/skipped/failed`）。真机验证：清空 agents.json →
+  重启 → 自动写入项目内 `claude-agent-acp` → 原生会话正常回复。
 - CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口（也是 SSH 工作区唯一入口）
 
 ### 原生入口真机验证（2026-11-01）
@@ -199,11 +205,29 @@ sessionId 路由事件与权限，不需要额外锁。
 4. **`assistant/chunk` 已不在 0.2 词表**：翻译器不再 append 该事件，否则日志会被
    session query 拒绝（`contains event type "assistant/chunk" unknown`）。
 
+### 审计与 state 边界
+
+两种 Claude 入口的持久化彼此独立，排障时先看入口：
+
+| 数据 | 控制台（本插件） | 原生会话（适配器） |
+|---|---|---|
+| 会话↔ACP 绑定 | `<dataDir>/sessions.json` | `<DSH_HOME>/dsh-acp/sidecar.sqlite` 的 `bindings` |
+| 权限决定审计 | `<dataDir>/audit/YYYY-MM-DD.jsonl`（只记元数据） | sidecar 的 `audit` 表（适配器自己的记录） |
+| 模型/模式快照 | `<dataDir>/sessions.json` 的 model/effort/mode | sidecar 的 `option_snapshots` |
+| DSH 会话日志 | 无（控制台会话不落 DSH 日志） | `<DSH_HOME>/sessions/...`（普通 DSH 会话，可恢复） |
+
+- CCW 的权限 Dock、放宽规则和 `audit` 只覆盖**控制台**会话；原生会话的权限由
+  Claude 自己提问，DSH Full access 下适配器自动 `allow-once`，不写 CCW 审计。
+- 两边都可能有同名 session：控制台用 `ccw-*` 自定义 ID，原生会话用
+  `session-<uuid>`；互不引用。
+- 原生会话的重启恢复依赖 DSH 日志与 sidecar binding；控制台依赖
+  `sessions.json` + ACP `session/load`。
+
 ### 尚需
 
-- 用 CCW 的工作区/主机配置替代 `agents.json`（当前原生入口只支持本地工作区）
+- SSH 工作区的原生入口（当前 agents.json 只由本地 host 自动补齐）
 - 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回
-- 跨机原生回归（当前原生入口只支持本地工作区）；适配器 sidecar/audit 与 CCW 审计的边界说明
+- 跨机原生回归（当前原生入口只支持本地工作区）
 - token 级流式显示（0.2 无 `assistant/chunk`，助手文本段末一次性出现）
 
 ## P4a composer 与工具树（2026-11-01）

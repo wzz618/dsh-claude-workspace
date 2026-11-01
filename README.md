@@ -50,14 +50,27 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 
 ```sh
 node scripts/prepare-acp-adapter.mjs /opt/dsh-acp-adapter
-
-mkdir -p ~/.dsh/dsh-acp
-cat > ~/.dsh/dsh-acp/agents.json <<'JSON'
-{"agents":{"claude-code":{"name":"Claude Code","command":"/absolute/path/to/claude-agent-acp","args":[],"env":{}}}}
-JSON
-
 dsh plugin --profile web add /opt/dsh-acp-adapter
 ```
+
+**本地主机无需手写 `agents.json`**：插件加载时会把 `hosts.<local>` 的
+`executable/args/env` 写进 `native.agentsFile`（默认
+`$DSH_HOME/dsh-acp/agents.json`），已存在的同名 agent 不会被覆盖。因此只需
+在本插件的配置里给出 ACP 可执行文件：
+
+```yaml
+- id: claude-workspace
+  config:
+    hosts:
+      local:
+        kind: local
+        executable: /absolute/path/to/claude-agent-acp
+        args: []
+```
+
+`GET /api/dsh-claude-workspace/status` 的 `native.seed` 会报告
+`created` / `present` / `skipped` / `failed` 及原因。关闭自动写入：
+`native.seedAgentsFile: false`，然后手工维护 `agents.json`。
 
 安装后重启 DSH，右侧栏控制台选中本地工作区时会出现 **新建 Claude 会话**。没有安装适配器时该按钮会把创建失败的原因显示在控制台里。
 
@@ -120,6 +133,8 @@ dsh plugin --profile web add /opt/dsh-acp-adapter
           model: default              # ACP 模型的默认项
           permissionPreset: danger-full-access
           attachToWorkspace: true     # 挂到对应 DSH 工作区，侧栏可见
+          agentsFile: '${DSH_HOME}/dsh-acp/agents.json'
+          seedAgentsFile: true        # 用本地 host 配置补齐 agents.json
 ```
 
 配置是严格的：未知字段、越界数值、非绝对路径、未声明的 `defaultHost`、`forwardClaudeOptions: false` 都会在加载时报错并列出全部问题。
