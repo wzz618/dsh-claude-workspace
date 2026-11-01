@@ -187,6 +187,8 @@ export interface ToolCall {
   readonly locations?: readonly ToolCallLocation[]
   readonly rawInput?: unknown
   readonly rawOutput?: unknown
+  /** Wire extension data; `claudeCode.parentToolUseId` links subagent calls to their launch. */
+  readonly _meta?: Record<string, unknown>
 }
 
 export type ToolCallUpdate = Partial<Omit<ToolCall, 'toolCallId'>> & { readonly toolCallId: string }

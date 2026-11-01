@@ -190,3 +190,26 @@ test('base64 byte length does not count framing characters', () => {
   assert.equal(base64Bytes('QUJD'), 3)
   assert.equal(base64Bytes('QUJDRA=='), 4)
 })
+
+const collectToolCards = client.collectToolCards as (events: unknown[]) => {
+  cards: Map<string, { toolCallId: string; title: string; status?: string; parentToolCallId?: string }>
+  order: string[]
+  childrenByParent: Map<string, { toolCallId: string }[]>
+}
+
+test('tool cards keep the latest state once and nest subagent children under their launch', () => {
+  const events = [
+    { type: 'tool-call', seq: 1, card: { toolCallId: 'agent', title: 'Task', status: 'pending' } },
+    { type: 'tool-update', seq: 2, card: { toolCallId: 'agent', title: 'List files', status: 'running' } },
+    { type: 'tool-call', seq: 3, card: { toolCallId: 'child', title: 'ls', status: 'pending', parentToolCallId: 'agent' } },
+    { type: 'tool-update', seq: 4, card: { toolCallId: 'child', title: 'ls', status: 'ok', parentToolCallId: 'agent' } },
+    { type: 'tool-call', seq: 5, card: { toolCallId: 'orphan', title: 'Read', parentToolCallId: 'missing' } },
+    { type: 'assistant-text', seq: 6, text: 'done' },
+  ]
+  const tree = collectToolCards(events)
+  assert.deepEqual(tree.order, ['agent', 'child', 'orphan'])
+  assert.equal(tree.cards.get('agent')!.title, 'List files')
+  assert.equal(tree.cards.get('child')!.status, 'ok')
+  assert.deepEqual(tree.childrenByParent.get('agent')!.map((card) => card.toolCallId), ['child'])
+  assert.equal(tree.childrenByParent.has('orphan'), false)
+})

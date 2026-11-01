@@ -34,6 +34,8 @@ export interface ToolCard {
   readonly locations: readonly ToolCallLocation[]
   readonly rawInput?: unknown
   readonly rawOutput?: unknown
+  /** Launching tool call when this call ran inside a Claude Code subagent. */
+  readonly parentToolCallId?: string
   readonly diffs: readonly DiffBlock[]
   readonly createdAt: number
   readonly updatedAt: number
@@ -202,6 +204,7 @@ export class SessionTranslator {
 function mergeToolCall(previous: ToolCard | undefined, update: ToolCall | ToolCallUpdate, now: number, seq: number): ToolCard {
   const content = update.content ?? previous?.content ?? []
   const reported = update.status === undefined ? previous?.status ?? 'pending' : normalizeStatus(update.status)
+  const parentToolCallId = parentToolCallIdOf(update) ?? previous?.parentToolCallId
   return {
     toolCallId: update.toolCallId,
     title: update.title ?? previous?.title ?? 'Tool call',
@@ -214,11 +217,20 @@ function mergeToolCall(previous: ToolCard | undefined, update: ToolCall | ToolCa
     locations: update.locations ?? previous?.locations ?? [],
     ...(update.rawInput === undefined ? (previous?.rawInput === undefined ? {} : { rawInput: previous.rawInput }) : { rawInput: update.rawInput }),
     ...(update.rawOutput === undefined ? (previous?.rawOutput === undefined ? {} : { rawOutput: previous.rawOutput }) : { rawOutput: update.rawOutput }),
+    ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
     diffs: extractDiffs(content),
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
     seq,
   }
+}
+
+/** Reads Claude Code's subagent launch identity from a tool call's `_meta`. */
+function parentToolCallIdOf(update: ToolCall | ToolCallUpdate): string | undefined {
+  const claudeCode = update._meta?.claudeCode
+  if (typeof claudeCode !== 'object' || claudeCode === null) return undefined
+  const parentToolUseId = (claudeCode as { readonly parentToolUseId?: unknown }).parentToolUseId
+  return typeof parentToolUseId === 'string' && parentToolUseId.length > 0 ? parentToolUseId : undefined
 }
 
 /** Maps ACP tool status onto the card state machine. */

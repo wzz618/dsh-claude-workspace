@@ -2,7 +2,7 @@
 
 给 DeepSeek Harness 用的「Claude Code 工作区」插件：按 DSH 工作区管理本地或 SSH 主机上的 Claude Code 会话，通过 ACP（Agent Client Protocol）保留 Claude 自己的工具、权限选项、diff、计划与模式，并把每次权限决定写入审计。
 
-本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）+ P2b（DSH 原生会话内联）+ P3（远程设置桥）**。P4–P5 的部分细节（子 agent 会话树、发布硬化）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
+本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）+ P2b（DSH 原生会话内联）+ P3（远程设置桥）**。P4–P5 的少数细节（`@` 与 DSH 文件索引一致、npm 发布）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
 
 ## 两种 Claude 入口
 
@@ -22,7 +22,7 @@
 - **权限**：Claude 给什么选项就展示什么（`allow_once` / `allow-with-updates` / `reject…`），原样回传；额外提供「放宽」：本命令 / 命令前缀 / 本工具。默认审批**永不超时**。
 - **远程**：`ssh -T -o BatchMode=yes -- <alias> claude-agent-acp` 直接承载 stdio，不暴露端口、不写桥、不要求目标机装 DSH。
 - **审计**：`<dataDir>/audit/YYYY-MM-DD.jsonl`，只记元数据（主机、工作区、会话、工具、参数摘要、决定、耗时）；服务启动时按 `audit.retainDays` 清理过期文件。
-- **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、断线重连、历史回放分隔与待审批计数；composer 支持 `/` 斜杠命令、`@` 文件选择与图片附件（超过 2 MB 自动缩放重编码）；设置页保留主机/工作区/规则管理。
+- **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、断线重连、历史回放分隔与待审批计数；composer 支持 `/` 斜杠命令、`@` 文件选择与图片附件（超过 2 MB 自动缩放重编码）；子 agent 的工具卡嵌套在启动它的 Agent/Task 卡内；设置页保留主机/工作区/规则管理。
 
 不处理 Claude 登录/凭据：目标机上的 `claude` 必须已经登录。插件不读取、不缓存、不转发任何凭据。
 

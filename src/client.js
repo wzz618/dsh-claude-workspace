@@ -117,6 +117,7 @@ window.__ModuleLoader__.load({
 			sessionsLabel: '个会话',
 			modeLabel: '模式',
 			toolLabel: '工具',
+			subagent: '子 agent',
 			nativeSession: '新建 Claude 会话',
 			nativeOpened: '已在新会话中打开 Claude',
 			nativeCreated: '会话已创建',
@@ -208,6 +209,7 @@ window.__ModuleLoader__.load({
 			sessionsLabel: 'sessions',
 			modeLabel: 'mode',
 			toolLabel: 'tool',
+			subagent: 'Subagent',
 			nativeSession: 'New Claude session',
 			nativeOpened: 'Opened Claude in a new session',
 			nativeCreated: 'Session created',
@@ -259,6 +261,7 @@ window.__ModuleLoader__.load({
 			picker: { display: 'flex', flexDirection: 'column', gap: '2px', border: '1px solid var(--dsw-alias-border-l4)', borderRadius: '8px', padding: '4px', background: 'var(--dsw-alias-bg-layer)', maxHeight: '220px', overflowY: 'auto' },
 			pickerItem: { textAlign: 'left', font: 'inherit', fontSize: '12px', padding: '3px 6px', border: 'none', borderRadius: '6px', background: 'transparent', color: 'inherit', cursor: 'pointer' },
 			chip: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', padding: '0 6px', borderRadius: '999px', border: '1px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)' },
+			subagentTree: { display: 'flex', flexDirection: 'column', gap: '6px', marginLeft: '10px', paddingLeft: '8px', borderLeft: '2px solid var(--dsw-alias-border-l3)' },
 			statusDot: { width: '7px', height: '7px', borderRadius: '999px', display: 'inline-block' },
 		}
 
@@ -289,6 +292,29 @@ window.__ModuleLoader__.load({
 				}
 			}
 			return groups
+		}
+
+		/** Latest card per toolCallId, in first-seen order, with subagent children grouped by launch id. */
+		function collectToolCards(events) {
+			const cards = new Map()
+			const order = []
+			for (const event of events) {
+				if (event === null || event === undefined) continue
+				if (event.type !== 'tool-call' && event.type !== 'tool-update') continue
+				const card = event.card
+				if (!cards.has(card.toolCallId)) order.push(card.toolCallId)
+				cards.set(card.toolCallId, card)
+			}
+			const childrenByParent = new Map()
+			for (const id of order) {
+				const card = cards.get(id)
+				const parent = card.parentToolCallId
+				if (parent === undefined || !cards.has(parent)) continue
+				const children = childrenByParent.get(parent) ?? []
+				children.push(card)
+				childrenByParent.set(parent, children)
+			}
+			return { cards, order, childrenByParent }
 		}
 
 		/** Flattens a config option's flat or grouped select values into `{value,name}`. */
@@ -999,9 +1025,38 @@ window.__ModuleLoader__.load({
 				const canCreateNative = Boolean(native && native.available
 					&& (selectedWorkspace === undefined || selectedWorkspace.host === undefined || selectedWorkspace.host.kind === 'local'))
 				const groups = groupEvents(events)
+				const toolTree = collectToolCards(events)
+				const renderedTools = new Set()
 				const commands = latestCommands(events)
 				const commandMatches = matchCommands(commands, promptText)
 				const approvedByRule = autoApprovals(events)
+				const renderToolCard = (card, opacity) => {
+					const children = toolTree.childrenByParent.get(card.toolCallId) ?? []
+					return h('details', {
+						key: `tool-${card.toolCallId}`,
+						open: card.status === 'running' || card.status === 'pending' || children.length > 0,
+						style: { ...styles.tool, ...opacity },
+						children: [
+							h('summary', { style: styles.toolSummary, children: [
+								h(Badge, { children: card.kind || t('toolLabel') }),
+								children.length > 0 ? h(Badge, { children: `${t('subagent')} · ${children.length}` }) : null,
+								approvedByRule[card.toolCallId]
+									? h(Badge, { style: { color: 'var(--dsw-alias-state-success-primary, #237804)' }, children: t('autoApproved') })
+									: null,
+								h('span', { style: { flex: '1 1 auto' }, children: card.title }),
+								h('span', { style: { ...styles.badge, ...statusStyle(card.status) }, children: statusLabel(t, card.status) }),
+							].filter(Boolean) }),
+							toolInputSummary(card) ? h('code', { style: { ...styles.code, ...styles.muted }, children: toolInputSummary(card) }) : null,
+							...(card.diffs || []).map((diff, index) => h(DiffView, { key: `d${index}`, diff, t })),
+							...(card.content || [])
+								.filter((entry) => entry.type === 'content' && entry.content && entry.content.type === 'text')
+								.map((entry, index) => h('div', { key: `c${index}`, style: { ...styles.code, ...styles.muted }, children: entry.content.text })),
+							children.length > 0
+								? h('div', { style: styles.subagentTree, children: children.map((child) => renderToolCard(child, {})) })
+								: null,
+						].filter(Boolean),
+					})
+				}
 				let sawReplay = false
 				const streamNodes = []
 				for (const item of groups) {
@@ -1023,27 +1078,11 @@ window.__ModuleLoader__.load({
 							h('div', { style: styles.message, children: item.text }),
 						] }))
 					} else if (item.type === 'tool-call' || item.type === 'tool-update') {
-						const card = item.card
-						streamNodes.push(h('details', {
-							key: `tool-${card.toolCallId}`,
-							open: card.status === 'running' || card.status === 'pending',
-							style: { ...styles.tool, ...opacity },
-							children: [
-								h('summary', { style: styles.toolSummary, children: [
-									h(Badge, { children: card.kind || t('toolLabel') }),
-									approvedByRule[card.toolCallId]
-										? h(Badge, { style: { color: 'var(--dsw-alias-state-success-primary, #237804)' }, children: t('autoApproved') })
-										: null,
-									h('span', { style: { flex: '1 1 auto' }, children: card.title }),
-									h('span', { style: { ...styles.badge, ...statusStyle(card.status) }, children: statusLabel(t, card.status) }),
-								] }),
-								toolInputSummary(card) ? h('code', { style: { ...styles.code, ...styles.muted }, children: toolInputSummary(card) }) : null,
-								...(card.diffs || []).map((diff, index) => h(DiffView, { key: `d${index}`, diff, t })),
-								...(card.content || [])
-									.filter((entry) => entry.type === 'content' && entry.content && entry.content.type === 'text')
-									.map((entry, index) => h('div', { key: `c${index}`, style: { ...styles.code, ...styles.muted }, children: entry.content.text })),
-							].filter(Boolean),
-						}))
+						const card = toolTree.cards.get(item.card.toolCallId) ?? item.card
+						const parent = card.parentToolCallId
+						if ((parent !== undefined && toolTree.cards.has(parent)) || renderedTools.has(card.toolCallId)) continue
+						renderedTools.add(card.toolCallId)
+						streamNodes.push(renderToolCard(card, opacity))
 					} else if (item.type === 'plan') {
 						streamNodes.push(h('div', { key: `p-${item.seq}`, style: { ...styles.plan, ...opacity }, children: [
 							h('div', { style: styles.cardTitle, children: t('planTitle') }),
@@ -1404,6 +1443,7 @@ window.__ModuleLoader__.load({
 		exports.SettingsSection = SettingsSection
 		exports.mergeEvents = mergeEvents
 		exports.groupEvents = groupEvents
+		exports.collectToolCards = collectToolCards
 		exports.flattenSelectValues = flattenSelectValues
 		exports.toolInputSummary = toolInputSummary
 		exports.latestCommands = latestCommands

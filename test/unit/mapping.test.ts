@@ -102,3 +102,49 @@ test('extractDiffs ignores non-diff content', () => {
   assert.equal(diffs[0]!.added, 1)
   assert.equal(diffs[0]!.removed, 1)
 })
+
+test('subagent tool calls keep their launching call id from _meta', () => {
+  const translator = new SessionTranslator('acp-1', () => 100)
+  translator.translate({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'agent-1',
+    title: 'Task',
+    name: 'Agent',
+    kind: 'think',
+    status: 'pending',
+  })
+  translator.translate({
+    sessionUpdate: 'tool_call',
+    toolCallId: 'child-1',
+    title: 'ls',
+    kind: 'execute',
+    status: 'pending',
+    _meta: { claudeCode: { parentToolUseId: 'agent-1' } },
+  })
+  translator.translate({
+    sessionUpdate: 'tool_call_update',
+    toolCallId: 'child-1',
+    status: 'completed',
+  })
+  const cards = translator.cards()
+  assert.equal(cards.length, 2)
+  assert.equal(cards[0]!.parentToolCallId, undefined)
+  assert.equal(cards[1]!.parentToolCallId, 'agent-1')
+})
+
+test('malformed _meta does not invent a parent', () => {
+  const translator = new SessionTranslator('acp-1', () => 100)
+  translator.translate({
+    sessionUpdate: 'tool_call',
+    toolCallId: 't1',
+    title: 'Read',
+    _meta: { claudeCode: { parentToolUseId: 42 } },
+  })
+  translator.translate({
+    sessionUpdate: 'tool_call',
+    toolCallId: 't2',
+    title: 'Read',
+    _meta: { claudeCode: 'nope' },
+  })
+  assert.deepEqual(translator.cards().map((card) => card.parentToolCallId), [undefined, undefined])
+})
