@@ -172,10 +172,53 @@ async function runTurn(promptId, sessionId) {
   finishPrompt(promptId, { stopReason: 'end_turn', usage: { input_tokens: 3, output_tokens: 2 } })
 }
 
-function startPrompt(promptId, sessionId) {
+function promptTextOf(prompt) {
+  return (Array.isArray(prompt) ? prompt : [])
+    .filter((block) => block !== null && block !== undefined && block.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
+}
+
+async function runSshE2E(promptId, sessionId, text) {
+  const session = sessions.get(sessionId)
+  const cwd = session === undefined ? process.cwd() : session.cwd
+  const match = /file named ([^ ]+)/.exec(text)
+  const name = match === null ? 'a.txt' : match[1]
+  const file = join(cwd, name)
+  const content = name.includes('allow') ? 'ssh-e2e' : name.includes('widen') ? 'widened' : 'rejected'
+  notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `writing ${name}` } })
+  notify(sessionId, {
+    sessionUpdate: 'tool_call',
+    toolCallId: 't1',
+    title: `Preparing ${name}`,
+    kind: 'edit',
+    status: 'in_progress',
+    content: [{ type: 'diff', path: file, oldText: '', newText: `${content}\n` }],
+    rawInput: { file_path: file, content },
+  })
+  const answer = await request('session/request_permission', {
+    sessionId,
+    toolCall: { toolCallId: 't1', title: `Write ${name}`, kind: 'edit', rawInput: { file_path: file, content } },
+    options: permissionOptions,
+  })
+  const optionId = answer?.outcome?.optionId
+  if (typeof optionId !== 'string' || optionId.startsWith('reject')) {
+    notify(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'failed' })
+  } else {
+    writeFileSync(file, `${content}\n`)
+    notify(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' })
+  }
+  finishPrompt(promptId, { stopReason: 'end_turn' })
+}
+
+function startPrompt(promptId, sessionId, text = '') {
   activePrompts.set(promptId, sessionId)
   const session = sessions.get(sessionId)
   const cwd = session === undefined ? process.cwd() : session.cwd
+  if (scenario === 'ssh-e2e') {
+    void runSshE2E(promptId, sessionId, text)
+    return
+  }
   if (scenario === 'die' || scenario === 'die-pending') {
     notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'about to crash' } })
     const pending = request('session/request_permission', permissionRequest(sessionId, cwd, 'Write a.txt'))
@@ -259,7 +302,7 @@ rl.on('line', (line) => {
         break
       }
       case 'session/prompt':
-        startPrompt(message.id, message.params.sessionId)
+        startPrompt(message.id, message.params.sessionId, promptTextOf(message.params.prompt))
         break
       case 'session/set_config_option':
       case 'session/set_mode':

@@ -15,6 +15,7 @@
 //   CCW_REMOTE_CWD  absolute existing directory on the remote host
 // Optional env:
 //   CCW_REMOTE_ACP      executable name or absolute path (default claude-agent-acp)
+//   CCW_REMOTE_ARGS     JSON array of arguments for the executable, e.g. '["/path/server.mjs","perm"]'
 //   CCW_REMOTE_COMMAND  explicit remote command, e.g.
 //                       "cd /path && exec ./node_modules/.bin/claude-agent-acp"
 //
@@ -32,7 +33,22 @@ import { makeTempDir, removeTempDir, waitFor } from '../helpers/temp.ts'
 const alias = process.env.CCW_SSH_ALIAS ?? ''
 const remoteCwd = process.env.CCW_REMOTE_CWD ?? ''
 const remoteAcp = process.env.CCW_REMOTE_ACP ?? 'claude-agent-acp'
+const remoteArgs = parseArgs(process.env.CCW_REMOTE_ARGS)
 const remoteCommand = process.env.CCW_REMOTE_COMMAND
+
+function parseArgs(value: string | undefined): string[] {
+  if (value === undefined || value.length === 0) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('CCW_REMOTE_ARGS must be a JSON array of strings')
+  }
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) {
+    throw new Error('CCW_REMOTE_ARGS must be a JSON array of strings')
+  }
+  return parsed
+}
 
 if (alias.length === 0 || remoteCwd.length === 0) {
   process.stderr.write(
@@ -52,7 +68,7 @@ const host = new SshHost({
   id: 'target',
   alias,
   executable: remoteAcp,
-  args: [],
+  args: remoteArgs,
   ...(remoteCommand === undefined ? {} : { command: remoteCommand }),
   env: {},
   ssh: sshSettings,
@@ -92,6 +108,7 @@ async function main(): Promise<void> {
             kind: 'ssh',
             alias,
             executable: remoteAcp,
+            args: remoteArgs,
             ...(remoteCommand === undefined ? {} : { command: remoteCommand }),
             connectTimeoutMs: 8000,
           },

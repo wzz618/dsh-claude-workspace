@@ -11,7 +11,7 @@
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
-| P3 远程 | **P3a/P3b 完成，跨机待验证** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写；断线标记、pending 过期审计、`sessions/reconnect` 与控制台重连按钮。localhost SSH 真机 PASS；**独立物理机尚未验证。** |
+| P3 远程 | **P3 完成** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读写、断线标记/过期/重连、`sessions/reconnect` 与控制台重连。localhost 与**第二台 Ubuntu VM 真实 Claude** 均 PASS。 |
 | P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
 | P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查；未做发布与 CI 矩阵。 |
 
@@ -115,7 +115,18 @@
   - 允许后进程崩溃 → prompt 拒绝、状态 `disconnected`、重连 `resumed=true`、后续正常回合
   - 待审批时崩溃 → pending 清零、审计出现 `expired:connection closed`、重连成功
 
-剩余：真实 SSH 断网/杀进程回归、跨物理机。
+剩余：真实 SSH 断网/杀进程回归。
+
+## P3c 跨物理机回归（2026-11-01）
+
+第二台 Ubuntu VM（kernel 6.8，Node 22.22.2，Claude Code 2.1.316，`claude-agent-acp` 0.99.1），通过公钥 SSH 连接：
+
+- 先用假 ACP 跑通真实网络上的健康检查、远程 Write 允许/拒绝、远端 `Edit(ccw-e2e-ssh-sub/**)` 写入/撤销（不依赖登录）
+- 再在目标机已登录的项目目录上跑真实 Claude：**PASS**
+- 发现：目标机用户级凭据存在但空项目目录仍报 `Authentication required`；必须在带项目级网关/模型配置的目录启动 ACP（或使用显式 `CCW_REMOTE_COMMAND` 指定 `cd`）
+- 清理验证：目标项目 `.claude/` 只剩原有 `settings.json`，无 `settings.local.json`/`.bak`/e2e 文件；测试用的假 ACP 已删除
+
+剩余：真实断网/杀进程（非进程崩溃）的 SSH 回归。
 
 ## P2b Q8 spike（2026-11-01）
 
@@ -174,7 +185,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 
 1. **不 fork `dsh-acp-adapter`（Q8 结论）**：本轮按计划 §8.1 独立实现 ACP 客户端与运行时，不复制其 25k 行代码；许可证上无需携带其版权，但接管的 agent-loop 行仍待 P2。若 P2 发现其恢复/选择器实现不可替代，再评估 fork。
 2. **不接管 agent-loop / model-selection**：P1 用 loopback HTTP 控制面，装插件不影响普通 DSH 会话；因此 §8.5 的「加载时检测其他 agent-loop 接管并拒绝」尚未实现（目前不存在本插件注册 factory 的动作）。P2 必须先补冲突检测，再启用两行 patch。
-3. **远程「放宽」已实现，跨机未验证**：`HostOps` 新增 `readText`/`writeTextAtomic`/`removeFile`/`home`；SSH 侧用同目录临时文件 + `mv`、`.bak`、回读校验写设置，规则按 host 记入 sidecar 可撤销。localhost SSH 真机 PASS；独立物理机与断网重连仍在 P3 剩余范围。
+3. **远程「放宽」与跨机已验证**：`HostOps` 新增 `readText`/`writeTextAtomic`/`removeFile`/`home`；SSH 侧用同目录临时文件 + `mv`、`.bak`、回读校验写设置，规则按 host 记入 sidecar 可撤销。localhost 与第二台 Ubuntu VM 的真实 Claude 均 PASS。
 4. **无终端 PTY / 子 agent 会话树 / MCP 注入 / 历史缓存（IndexedDB）**：计划中的 P4 范围。
 5. **审计写失败不阻断请求**：`#auditDecision` 吞掉写入错误，避免审计盘满导致权限流程卡死；这属于有意的可用性取舍，P5 可改为显式告警。
 6. **健康检查版本探测**：使用主机配置的可执行文件（默认 `claude-agent-acp`），版本区间可配；探测不到版本时只做握手判断。
@@ -194,7 +205,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 
 ## 下一步（建议顺序）
 
-1. **P1 真机回归**：本机已完成本地 `test:real` 全流程；剩余 `dsh plugin --profile <test> add <路径>` + `--dump-config` 的插件加载验证（会改 `~/.dsh`，本轮未执行）与 ssh 目标真机回归。
+1. **P1 真机回归**：本机完成本地 `test:real` 全流程；`dsh plugin --profile <test> add <路径>` + `--dump-config` 在隔离 `DSH_HOME` 验证通过（含安装/卸载残留检查）；ssh 已在第二台 Ubuntu VM 完成真实 Claude 回归。
 2. **P2b 接管 agent-loop**：先做 Q8 spike（DSH 0.2.x 的私有发布流程 vs 适配器的 host-compat）；实现后补 `setFactory` 冲突检测、替换 `ui-model-selection`，再考虑把 P2a 控制台迁入会话内联呈现。
 3. **P3 远程设置桥**：为 `HostOps` 增加读/原子写文件能力，解除远程 widen 限制，并在 ssh 断线时按 workspace 标 `expired`（已按 workspace 过滤）。
 4. **P4**：终端 PTY、子 agent、`/` 命令、`@` 文件、图片预算。

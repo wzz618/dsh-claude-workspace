@@ -192,7 +192,7 @@ npm run build          # tsc -> lib/，并复制浏览器半区
 
 `test/real/real-acp.ts` 在已登录的目标机上驱动真实 `claude-agent-acp`，覆盖：健康检查（握手 + 建会话）、允许、拒绝、`Edit(sub/**)` 放宽与撤销、转发「don't ask again」（Bash 会写带 `\(` 转义的规则）、执行中取消、`session/load` 回放与模型重设、重启恢复。默认使用 `claude-code-test` 目录，可用 `CCW_REAL_CWD` 与 `CCW_ACP_BIN` 覆盖；测试结束后恢复/删除它创建的文件，不触碰 `.claude/settings.json`。
 
-`test/real/real-ssh.ts` 通过真实 ssh 驱动远端 Claude Code，覆盖健康检查、远程 Write 允许/拒绝、远程 `Edit(sub/**)` 放宽（写远端设置、撤销、恢复原文件）。
+`test/real/real-ssh.ts` 通过真实 ssh 驱动远端 Claude Code，覆盖健康检查、远程 Write 允许/拒绝、远程 `Edit(sub/**)` 放宽（写远端设置、撤销、恢复原文件）。已在第二台 Ubuntu VM（Node 22、Claude Code 2.1.316、claude-agent-acp 0.99.1）完成真实回归；`CCW_REMOTE_ARGS` 可传入远端 ACP 参数（JSON 数组），便于先用假 ACP 验证传输层。
 
 `test/real/plugin-install.ts` 在临时 `DSH_HOME` 中执行 `dsh plugin add` → `--dump-config` → `remove` → `--dump-config`，断言插件行、依赖与 bundle 均被清理。需要 `DSH_REPO` 指向 deepseek-harness 检出。
 
