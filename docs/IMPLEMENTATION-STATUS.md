@@ -181,6 +181,10 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
 4. JSONL 会话物化，ACP sidecar 记录 `acp-claude-code` binding（claude-agent-acp 0.99.1）
 5. 重启 DSH → 同一 sessionId 再次 prompt → `request/header reason:"resume"`、
    ACP `session/resume` 恢复上下文、第二轮回复正确
+6. 同一工作区两个原生会话并发 prompt → 各自得到 A/B 回复，互不串流
+
+并发验证表明：同一个工作区的多个 ACP 子进程由适配器独立管理；DSH 侧按
+sessionId 路由事件与权限，不需要额外锁。
 
 ### 迁移修复（真机重启暴露）
 
@@ -199,7 +203,7 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
 
 - 用 CCW 的工作区/主机配置替代 `agents.json`（当前原生入口只支持本地工作区）
 - 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回
-- 并发多会话/跨机原生回归；适配器 sidecar/audit 与 CCW 审计的边界说明
+- 跨机原生回归（当前原生入口只支持本地工作区）；适配器 sidecar/audit 与 CCW 审计的边界说明
 - token 级流式显示（0.2 无 `assistant/chunk`，助手文本段末一次性出现）
 
 ## P4a composer（2026-11-01）
