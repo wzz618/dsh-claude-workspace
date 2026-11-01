@@ -171,3 +171,22 @@ test('apply registers the settings section and the right-sidebar tab type', () =
   assert.equal(effects.length, 2)
   assert.ok(effects.every((dispose) => typeof dispose === 'function'))
 })
+
+const scaledDimensions = client.scaledDimensions as (width: number, height: number, maxEdge?: number) => { width: number; height: number }
+const base64Bytes = client.base64Bytes as (base64: string) => number
+
+test('image scaling fits the long edge and keeps the aspect ratio', () => {
+  assert.deepEqual(scaledDimensions(800, 600), { width: 800, height: 600 })
+  assert.deepEqual(scaledDimensions(4096, 2048), { width: 2048, height: 1024 })
+  assert.deepEqual(scaledDimensions(1000, 4000), { width: 512, height: 2048 })
+  assert.deepEqual(scaledDimensions(1, 4096), { width: 1, height: 2048 })
+  assert.deepEqual(scaledDimensions(4096, 4096, 512), { width: 512, height: 512 })
+})
+
+test('base64 byte length does not count framing characters', () => {
+  assert.equal(base64Bytes(''), 0)
+  assert.equal(base64Bytes('QQ=='), 1)
+  assert.equal(base64Bytes('QUI='), 2)
+  assert.equal(base64Bytes('QUJD'), 3)
+  assert.equal(base64Bytes('QUJDRA=='), 4)
+})

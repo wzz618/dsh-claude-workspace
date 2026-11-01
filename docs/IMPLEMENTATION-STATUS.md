@@ -12,8 +12,8 @@
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
 | P2 呈现层 | **P2a 完成；P2b 可用（原生入口 + 重启恢复）** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 跑通；新增一键「新建 Claude 会话」入口，并补齐 0.2.1 持久化/恢复 API 迁移。 |
 | P3 远程 | **P3 完成** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读写、断线标记/过期/重连、`sessions/reconnect` 与控制台重连。localhost 与**第二台 Ubuntu VM 真实 Claude** 均 PASS。 |
-| P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
-| P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查；未做发布与 CI 矩阵。 |
+| P4 细节对齐 | **P4a 完成 + 图片压缩；子 agent 待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB，超限自动缩放重编码）；计划卡与模型选择已在前序完成。子 agent 会话树与快捷键扩展仍待做。 |
+| P5 硬化 | **P5a + P5b 完成，npm 发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志（0600）、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查、Node 22/24 CI 矩阵；未执行真实 npm 发布。 |
 
 ## §12.3 实现顺序对照
 
@@ -206,11 +206,13 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
 
 - **`/` 斜杠命令**：读取最新的 `available_commands_update`，按前缀过滤后显示菜单，点击写入 `/<name> `
 - **`@` 文件选择**：新增 `GET /workspaces/files`；目录限定在工作区根或派生会话目录内，返回目录优先排序的直接子项；选择文件写入相对路径 `@path`
-- **图片附件**：选择图片后转 base64 作为 ACP image block，最多 4 张、每张 ≤2 MB；发送后清空
+- **图片附件**：选择图片后转 base64 作为 ACP image block，最多 4 张、每张 ≤2 MB；
+  **超过 2 MB 时先用 canvas 等比缩放到长边 ≤2048 并重编码**（PNG 首轮保透明，
+  仍超限退回 JPEG，最多 4 轮）；缩不到预算才报错。发送后清空
 - Host 新增 `listDirectory`（local `readdir`；SSH `find -printf '%y\t%f\0'`），并修正了远程脚本 `$0/$1` 传参问题
-- 验证：单元/HTTP 用例覆盖排序、限制、越界拒绝、命令匹配、路径相对化；SSH host 冒烟验证目录列举、原子写、读取、home、删除；`test:real:ssh` 增加“列举远端工作区并找到刚写入文件”的断言
+- 验证：单元/HTTP 用例覆盖排序、限制、越界拒绝、命令匹配、路径相对化、缩放与 base64 字节计算；SSH host 冒烟验证目录列举、原子写、读取、home、删除；`test:real:ssh` 增加“列举远端工作区并找到刚写入文件”的断言
 
-剩余 P4：子 agent 会话树、图片压缩与预算、`@` 与 DSH 文件索引的一致、快捷键。
+剩余 P4：子 agent 会话树、`@` 与 DSH 文件索引的一致、快捷键扩展。
 
 ## P5a 硬化（2026-11-01）
 
@@ -222,7 +224,21 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
 - **`@` 列举范围收紧**：只允许工作区根或当前会话 cwd，不能借派生根浏览兄弟工作区
 - **自动放行标记**：命中会话放宽规则时发出 `auto-approved` 事件，工具卡显示 `auto` 徽标，并写 `auto:<rule>` 审计
 
-剩余 P5：CI 兼容矩阵、日志内容脱敏策略复核、正式发布。
+剩余 P5：日志内容脱敏策略复核、正式发布（npm）。
+
+## P5b CI 与发布准备（2026-11-01）
+
+- **CI 矩阵**：`.github/workflows/ci.yml` 在 Node 22 / 24 上跑 `npm ci`、`typecheck`、
+  `test`、`build`
+- **日志权限**：ACP stderr 日志文件创建时即为 `0600`（此前跟随 umask）
+- **包元数据**：补 `repository` / `homepage` / `bugs` / `publishConfig.access=public`，
+  `prepack` 已会先构建
+- 审计本身只记元数据（主机、工作区、会话、工具名、参数摘要 8 位哈希、决定、耗时），
+  不记命令文本、文件内容与模型输出
+- 尚未执行 `npm publish`（需要发布账号与 2FA）；发布前跑一次 `npm pack --dry-run`
+  检查 `files` 白名单
+
+剩余：真实 npm 发布、日志内容脱敏的人工抽样复核。
 
 ### DSH Loader 装配（隔离环境）
 

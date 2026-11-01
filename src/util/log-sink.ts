@@ -41,7 +41,7 @@ export class RollingLogSink {
       if ((this.#size ?? 0) > 0 && (this.#size ?? 0) + bytes > this.#options.maxBytes) {
         await this.#rotate()
       }
-      await appendFile(this.#path, text, 'utf8')
+      await appendFile(this.#path, text, { encoding: 'utf8', mode: 0o600 })
       this.#size = (this.#size ?? 0) + bytes
     })
   }

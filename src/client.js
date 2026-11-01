@@ -367,6 +367,21 @@ window.__ModuleLoader__.load({
 
 		const MAX_IMAGES = 4
 		const MAX_IMAGE_BYTES = 2 * 1024 * 1024
+		const MAX_IMAGE_EDGE = 2048
+
+		/** Fit one image into a square box, preserving its aspect ratio. */
+		function scaledDimensions(width, height, maxEdge = MAX_IMAGE_EDGE) {
+			const longest = Math.max(width, height)
+			if (!(longest > maxEdge)) return { width, height }
+			const scale = maxEdge / longest
+			return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) }
+		}
+
+		/** Decoded byte length of a base64 payload. */
+		function base64Bytes(base64) {
+			const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+			return Math.floor((base64.length * 3) / 4) - padding
+		}
 
 		/** Reads one browser File as an ACP image block payload. */
 		function readImageFile(file) {
@@ -384,6 +399,89 @@ window.__ModuleLoader__.load({
 				reader.onerror = () => reject(new Error('could not read image'))
 				reader.readAsDataURL(file)
 			})
+		}
+
+		function blobToPayload(blob, name) {
+			return new Promise((resolve, reject) => {
+				const reader = new FileReader()
+				reader.onload = () => {
+					const result = typeof reader.result === 'string' ? reader.result : ''
+					const match = /^data:([^;]+);base64,(.*)$/.exec(result)
+					if (match === null) reject(new Error('unsupported encoded image'))
+					else resolve({ data: match[2], mimeType: match[1], name })
+				}
+				reader.onerror = () => reject(new Error('could not read encoded image'))
+				reader.readAsDataURL(blob)
+			})
+		}
+
+		function loadBitmap(file) {
+			if (typeof createImageBitmap === 'function') return createImageBitmap(file)
+			return new Promise((resolve, reject) => {
+				const url = URL.createObjectURL(file)
+				const image = new Image()
+				image.onload = () => {
+					URL.revokeObjectURL(url)
+					resolve(image)
+				}
+				image.onerror = () => {
+					URL.revokeObjectURL(url)
+					reject(new Error('could not decode image'))
+				}
+				image.src = url
+			})
+		}
+
+		function drawScaled(bitmap, size) {
+			if (typeof OffscreenCanvas === 'function') {
+				const canvas = new OffscreenCanvas(size.width, size.height)
+				canvas.getContext('2d').drawImage(bitmap, 0, 0, size.width, size.height)
+				return canvas
+			}
+			const canvas = document.createElement('canvas')
+			canvas.width = size.width
+			canvas.height = size.height
+			canvas.getContext('2d').drawImage(bitmap, 0, 0, size.width, size.height)
+			return canvas
+		}
+
+		function canvasBlob(canvas, type, quality) {
+			if (typeof canvas.convertToBlob === 'function') return canvas.convertToBlob({ type, quality })
+			return new Promise((resolve, reject) => canvas.toBlob(
+				(blob) => (blob === null ? reject(new Error('could not encode image')) : resolve(blob)),
+				type,
+				quality,
+			))
+		}
+
+		/**
+		 * Downscale an image until it fits the per-image byte budget, keeping PNG
+		 * for transparent sources on the first attempt and falling back to JPEG.
+		 */
+		async function compressImage(file) {
+			const bitmap = await loadBitmap(file)
+			try {
+				const width = bitmap.width ?? bitmap.naturalWidth
+				const height = bitmap.height ?? bitmap.naturalHeight
+				let size = scaledDimensions(width, height)
+				let type = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
+				for (let attempt = 0; attempt < 4; attempt += 1) {
+					const payload = await blobToPayload(await canvasBlob(drawScaled(bitmap, size), type, 0.85), file.name)
+					if (base64Bytes(payload.data) <= MAX_IMAGE_BYTES) return payload
+					type = 'image/jpeg'
+					const edge = Math.max(512, Math.round(Math.max(size.width, size.height) / 2))
+					size = scaledDimensions(size.width, size.height, edge)
+				}
+			} finally {
+				bitmap.close?.()
+			}
+			throw new Error('image could not be compressed below the size limit')
+		}
+
+		/** Attach an image as-is when it fits, otherwise downscale it first. */
+		async function prepareImage(file) {
+			if (file.size <= MAX_IMAGE_BYTES) return readImageFile(file)
+			return compressImage(file)
 		}
 
 		function clip(text) {
@@ -814,11 +912,11 @@ window.__ModuleLoader__.load({
 					const accepted = []
 					for (const file of files) {
 						if (!file.type || !file.type.startsWith('image/')) continue
-						if (file.size > MAX_IMAGE_BYTES) {
+						try {
+							accepted.push(await prepareImage(file))
+						} catch {
 							setImageError(t('imageTooLarge'))
-							continue
 						}
-						accepted.push(await readImageFile(file))
 					}
 					setImages((current) => {
 						const combined = [...current, ...accepted]
@@ -897,6 +995,9 @@ window.__ModuleLoader__.load({
 
 				const stateLabel = runtime === 'busy' ? t('stateBusy') : runtime === 'disconnected' ? t('stateDisconnected') : runtime === 'ready' ? t('stateReady') : t('stateStopped')
 				const stateColor = runtime === 'busy' ? 'var(--dsw-alias-state-business-primary, #4b7bec)' : runtime === 'disconnected' ? 'var(--dsw-alias-state-error-primary, #d4380d)' : runtime === 'ready' ? 'var(--dsw-alias-state-success-primary, #237804)' : 'var(--dsw-alias-label-tertiary)'
+				const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId)
+				const canCreateNative = Boolean(native && native.available
+					&& (selectedWorkspace === undefined || selectedWorkspace.host === undefined || selectedWorkspace.host.kind === 'local'))
 				const groups = groupEvents(events)
 				const commands = latestCommands(events)
 				const commandMatches = matchCommands(commands, promptText)
@@ -1090,7 +1191,7 @@ window.__ModuleLoader__.load({
 								onClick: () => void openSession(),
 								children: t('openSession'),
 							}),
-							native && native.available
+							canCreateNative
 								? h('button', {
 									style: styles.button,
 									disabled: busy || !workspaceId,
@@ -1310,6 +1411,8 @@ window.__ModuleLoader__.load({
 		exports.autoApprovals = autoApprovals
 		exports.relativeWithin = relativeWithin
 		exports.parentDirectory = parentDirectory
+		exports.scaledDimensions = scaledDimensions
+		exports.base64Bytes = base64Bytes
 		return module.exports
 	},
 })

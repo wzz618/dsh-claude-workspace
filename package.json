@@ -54,6 +54,17 @@
     "workspace"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wzz618/dsh-claude-workspace.git"
+  },
+  "homepage": "https://github.com/wzz618/dsh-claude-workspace#readme",
+  "bugs": {
+    "url": "https://github.com/wzz618/dsh-claude-workspace/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.19.0"
   },

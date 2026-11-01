@@ -1,9 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { RollingLogSink } from '../../src/util/log-sink.ts'
 import { makeTempDir, removeTempDir } from '../helpers/temp.ts'
+
+test('creates the log readable only by its owner', async () => {
+  const dir = await makeTempDir()
+  try {
+    const path = join(dir, 'private.log')
+    await new RollingLogSink(path, { maxBytes: 1024, files: 1 }).append('x')
+    assert.equal((await stat(path)).mode & 0o777, 0o600)
+  } finally {
+    await removeTempDir(dir)
+  }
+})
 
 test('rotates to .1 and keeps the configured number of files', async () => {
   const dir = await makeTempDir()
