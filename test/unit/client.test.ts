@@ -31,7 +31,7 @@ function fakeRequire(name: string): unknown {
       useRef: (initial: unknown) => ({ current: initial }),
     }
   }
-  if (name === 'react/jsx-runtime') return { jsx: () => null }
+  if (name === 'react/jsx-runtime') return { jsx: (type: unknown, props: unknown) => ({ type, props }) }
   throw new Error(`unexpected module ${name}`)
 }
 
@@ -275,4 +275,22 @@ test('a persisted console binding offers resume after a Host restart', () => {
   assert.equal(needsResume('stopped', false, false), false)
   assert.equal(needsResume('ready', false, true), false)
   assert.equal(needsResume('stopped', true, true), false)
+})
+
+const renderMarkdownNodes = client.renderMarkdownNodes as (text: string) => Array<{ type?: unknown; props?: { children?: unknown } }>
+
+function flattenNodes(node: unknown): string {
+  if (typeof node === 'string') return node
+  if (Array.isArray(node)) return node.map(flattenNodes).join('')
+  if (node === null || node === undefined) return ''
+  const candidate = node as { props?: { children?: unknown } }
+  return flattenNodes(candidate.props?.children)
+}
+
+test('Markdown rendering keeps paragraph and table content', () => {
+  const nodes = renderMarkdownNodes('当前目录 `/x` 的内容：\n\n| 名称 | 类型 |\n|------|------|\n| `.claude/` | 目录 |')
+  assert.equal(nodes[0]!.type, 'p')
+  assert.match(flattenNodes(nodes[0]), /当前目录 .*\/x.* 的内容/)
+  assert.equal(nodes[1]!.type, 'table')
+  assert.match(flattenNodes(nodes[1]), /\.claude\/.*目录/)
 })

@@ -662,13 +662,13 @@ window.__ModuleLoader__.load({
 				const key = `${keyPrefix}-${index}`
 				switch (token.type) {
 					case 'text': return token.text
-					case 'code': return h('code', { key, style: styles.mdCode }, token.text)
-					case 'strong': return h('strong', { key }, renderInlineTokens(token.children, key))
-					case 'em': return h('em', { key }, renderInlineTokens(token.children, key))
-					case 'strike': return h('del', { key }, renderInlineTokens(token.children, key))
+					case 'code': return h('code', { key, style: styles.mdCode, children: token.text })
+					case 'strong': return h('strong', { key, children: renderInlineTokens(token.children, key) })
+					case 'em': return h('em', { key, children: renderInlineTokens(token.children, key) })
+					case 'strike': return h('del', { key, children: renderInlineTokens(token.children, key) })
 					case 'link': return safeMarkdownHref(token.href)
 						? h('a', { key, href: token.href, target: '_blank', rel: 'noreferrer', style: styles.mdLink, children: renderInlineTokens(parseInline(token.text), key) })
-						: h(Fragment, { key }, token.text)
+						: h(Fragment, { key, children: token.text })
 					default: return null
 				}
 			})
@@ -690,19 +690,19 @@ window.__ModuleLoader__.load({
 			return parseMarkdown(text).map((block, index) => {
 				const key = `${keyPrefix}-${index}`
 				switch (block.type) {
-					case 'code': return h('pre', { key, style: styles.mdPre }, [
+					case 'code': return h('pre', { key, style: styles.mdPre, children: [
 						block.lang ? h('div', { key: 'lang', style: styles.mdLang, children: block.lang }) : null,
 						h('code', { key: 'code', style: styles.mdPreCode, children: block.text }),
-					].filter(Boolean))
-					case 'heading': return h(`h${Math.min(block.level + 2, 6)}`, { key, style: styles.mdHeading }, renderInlineText(block.text, key))
+					].filter(Boolean) })
+					case 'heading': return h(`h${Math.min(block.level + 2, 6)}`, { key, style: styles.mdHeading, children: renderInlineText(block.text, key) })
 					case 'hr': return h('hr', { key, style: styles.mdHr })
-					case 'quote': return h('blockquote', { key, style: styles.mdQuote }, renderInlineText(block.text, key))
-					case 'list': return h(block.ordered ? 'ol' : 'ul', { key, style: styles.mdList }, block.items.map((item, itemIndex) => h('li', {
+					case 'quote': return h('blockquote', { key, style: styles.mdQuote, children: renderInlineText(block.text, key) })
+					case 'list': return h(block.ordered ? 'ol' : 'ul', { key, style: styles.mdList, children: block.items.map((item, itemIndex) => h('li', {
 						key: `li-${itemIndex}`,
 						style: item.indent > 0 ? { marginLeft: `${Math.min(item.indent, 8) * 6}px` } : undefined,
 						children: renderInlineText(item.text, `${key}-li-${itemIndex}`),
-					})))
-					case 'table': return h('table', { key, style: styles.mdTable }, [
+					})) })
+					case 'table': return h('table', { key, style: styles.mdTable, children: [
 						h('thead', { key: 'head', children: h('tr', { children: block.header.map((cell, cellIndex) => h('th', {
 							key: `h-${cellIndex}`, style: styles.mdTh, children: renderInlineText(cell, `${key}-h-${cellIndex}`),
 						})) }) }),
@@ -712,8 +712,8 @@ window.__ModuleLoader__.load({
 								key: `c-${cellIndex}`, style: styles.mdTd, children: renderInlineText(cell, `${key}-r-${rowIndex}-c-${cellIndex}`),
 							})),
 						})) }),
-					])
-					case 'paragraph': return h('p', { key, style: styles.mdParagraph }, renderInlineText(block.text, key))
+					] })
+					case 'paragraph': return h('p', { key, style: styles.mdParagraph, children: renderInlineText(block.text, key) })
 					default: return null
 				}
 			})
@@ -1653,6 +1653,7 @@ window.__ModuleLoader__.load({
 		exports.groupEvents = groupEvents
 		exports.collectToolCards = collectToolCards
 		exports.needsResume = needsResume
+		exports.renderMarkdownNodes = renderMarkdownNodes
 		exports.parseMarkdown = parseMarkdown
 		exports.parseInline = parseInline
 		exports.splitTableRow = splitTableRow
