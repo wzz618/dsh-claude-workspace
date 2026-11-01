@@ -242,6 +242,20 @@ window.__ModuleLoader__.load({
 			composer: { flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--dsw-alias-border-l4)', paddingTop: '8px' },
 			dock: { flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: '6px' },
 			message: { fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+			messageMd: { fontSize: '13px', lineHeight: 1.55, wordBreak: 'break-word' },
+			mdParagraph: { margin: '2px 0 6px' },
+			mdCode: { ...{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '11px' }, padding: '0 3px', borderRadius: '4px', background: 'var(--dsw-alias-bg-layer-2)' },
+			mdPre: { margin: '4px 0 8px', padding: '8px', borderRadius: '8px', background: 'var(--dsw-alias-bg-layer)', overflowX: 'auto' },
+			mdPreCode: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '11px', whiteSpace: 'pre-wrap' },
+			mdLang: { fontSize: '10px', color: 'var(--dsw-alias-label-tertiary)', marginBottom: '4px' },
+			mdHeading: { margin: '8px 0 4px', fontWeight: 600 },
+			mdHr: { border: 'none', borderTop: '1px solid var(--dsw-alias-border-l3)', margin: '8px 0' },
+			mdQuote: { margin: '4px 0 8px', paddingLeft: '10px', borderLeft: '3px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)' },
+			mdList: { margin: '4px 0 8px', paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '2px' },
+			mdTable: { borderCollapse: 'collapse', fontSize: '12px', margin: '6px 0 10px' },
+			mdTh: { border: '1px solid var(--dsw-alias-border-l3)', padding: '3px 8px', background: 'var(--dsw-alias-bg-layer)', textAlign: 'left' },
+			mdTd: { border: '1px solid var(--dsw-alias-border-l3)', padding: '3px 8px' },
+			mdLink: { color: 'var(--dsw-alias-state-business-primary, #4b7bec)', textDecoration: 'underline' },
 			messageUser: { fontSize: '13px', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', padding: '6px 10px', borderRadius: '10px', background: 'var(--dsw-alias-bg-layer-2)', alignSelf: 'flex-end', maxWidth: '90%' },
 			thinking: { fontSize: '12px', color: 'var(--dsw-alias-label-tertiary)' },
 			replay: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary)' },
@@ -512,6 +526,192 @@ window.__ModuleLoader__.load({
 
 		function clip(text) {
 			return text.length > 220 ? `${text.slice(0, 219)}…` : text
+		}
+
+		// ── lightweight Markdown (assistant text) ─────────────────────────────
+
+		/** Split one table row into trimmed cells. */
+		function splitTableRow(line) {
+			return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim())
+		}
+
+		function isTableSeparator(line) {
+			return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+		}
+
+		/** Inline Markdown tokens: code, strong, emphasis, strike, links. */
+		function parseInline(text) {
+			const tokens = []
+			const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]*\]\([^)]*\))/g
+			let last = 0
+			let match
+			while ((match = pattern.exec(text)) !== null) {
+				if (match.index > last) tokens.push({ type: 'text', text: text.slice(last, match.index) })
+				const raw = match[0]
+				if (raw.startsWith('`')) tokens.push({ type: 'code', text: raw.slice(1, -1) })
+				else if (raw.startsWith('**') || raw.startsWith('__')) tokens.push({ type: 'strong', children: parseInline(raw.slice(2, -2)) })
+				else if (raw.startsWith('~~')) tokens.push({ type: 'strike', children: parseInline(raw.slice(2, -2)) })
+				else if (raw.startsWith('*') || raw.startsWith('_')) tokens.push({ type: 'em', children: parseInline(raw.slice(1, -1)) })
+				else {
+					const link = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(raw)
+					if (link !== null) tokens.push({ type: 'link', text: link[1], href: link[2] })
+				}
+				last = match.index + raw.length
+			}
+			if (last < text.length) tokens.push({ type: 'text', text: text.slice(last) })
+			return tokens
+		}
+
+		/** Block-level Markdown: fences, headings, rules, quotes, tables, lists, paragraphs. */
+		function parseMarkdown(text) {
+			const lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')
+			const blocks = []
+			const startsBlock = (line, index) => /^\s*(```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(line)
+				|| /^\s*([-*_])(\s*\1){2,}\s*$/.test(line)
+				|| (line.includes('|') && index + 1 < lines.length && isTableSeparator(lines[index + 1]))
+			let index = 0
+			while (index < lines.length) {
+				const line = lines[index]
+				if (line.trim() === '') {
+					index += 1
+					continue
+				}
+				const fence = /^\s*```\s*(\S*)\s*$/.exec(line)
+				if (fence !== null) {
+					const body = []
+					index += 1
+					while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+						body.push(lines[index])
+						index += 1
+					}
+					if (index < lines.length) index += 1
+					blocks.push({ type: 'code', lang: fence[1] || '', text: body.join('\n') })
+					continue
+				}
+				const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+				if (heading !== null) {
+					blocks.push({ type: 'heading', level: heading[1].length, text: heading[2] })
+					index += 1
+					continue
+				}
+				if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+					blocks.push({ type: 'hr' })
+					index += 1
+					continue
+				}
+				if (/^\s*>\s?/.test(line)) {
+					const quoted = []
+					while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+						quoted.push(lines[index].replace(/^\s*>\s?/, ''))
+						index += 1
+					}
+					blocks.push({ type: 'quote', text: quoted.join('\n') })
+					continue
+				}
+				if (line.includes('|') && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
+					const header = splitTableRow(line)
+					index += 2
+					const rows = []
+					while (index < lines.length && lines[index].includes('|') && lines[index].trim() !== '') {
+						rows.push(splitTableRow(lines[index]))
+						index += 1
+					}
+					blocks.push({ type: 'table', header, rows })
+					continue
+				}
+				const listItem = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line)
+				if (listItem !== null) {
+					const ordered = /\d/.test(listItem[2])
+					const items = []
+					while (index < lines.length) {
+						const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[index])
+						if (item === null || /\d/.test(item[2]) !== ordered) break
+						items.push({ indent: item[1].length, text: item[3] })
+						index += 1
+					}
+					blocks.push({ type: 'list', ordered, items })
+					continue
+				}
+				const paragraph = []
+				while (index < lines.length && lines[index].trim() !== '' && !startsBlock(lines[index], index)) {
+					paragraph.push(lines[index])
+					index += 1
+				}
+				if (paragraph.length === 0) {
+					// A marker that started no block (for example a lone list marker):
+					// consume it as text so the loop always advances.
+					paragraph.push(lines[index])
+					index += 1
+				}
+				blocks.push({ type: 'paragraph', text: paragraph.join('\n') })
+			}
+			return blocks
+		}
+
+		function safeMarkdownHref(href) {
+			return /^(https?:\/\/|mailto:)/i.test(href)
+		}
+
+		function renderInlineTokens(tokens, keyPrefix) {
+			return tokens.map((token, index) => {
+				const key = `${keyPrefix}-${index}`
+				switch (token.type) {
+					case 'text': return token.text
+					case 'code': return h('code', { key, style: styles.mdCode }, token.text)
+					case 'strong': return h('strong', { key }, renderInlineTokens(token.children, key))
+					case 'em': return h('em', { key }, renderInlineTokens(token.children, key))
+					case 'strike': return h('del', { key }, renderInlineTokens(token.children, key))
+					case 'link': return safeMarkdownHref(token.href)
+						? h('a', { key, href: token.href, target: '_blank', rel: 'noreferrer', style: styles.mdLink, children: renderInlineTokens(parseInline(token.text), key) })
+						: h(Fragment, { key }, token.text)
+					default: return null
+				}
+			})
+		}
+
+		/** Render paragraph text with soft line breaks preserved as <br>. */
+		function renderInlineText(text, keyPrefix) {
+			const parts = text.split('\n')
+			const nodes = []
+			parts.forEach((part, index) => {
+				if (index > 0) nodes.push(h('br', { key: `${keyPrefix}-br-${index}` }))
+				nodes.push(...renderInlineTokens(parseInline(part), `${keyPrefix}-${index}`))
+			})
+			return nodes
+		}
+
+		/** Render assistant Markdown without raw HTML; links are limited to http(s)/mailto. */
+		function renderMarkdownNodes(text, keyPrefix = 'md') {
+			return parseMarkdown(text).map((block, index) => {
+				const key = `${keyPrefix}-${index}`
+				switch (block.type) {
+					case 'code': return h('pre', { key, style: styles.mdPre }, [
+						block.lang ? h('div', { key: 'lang', style: styles.mdLang, children: block.lang }) : null,
+						h('code', { key: 'code', style: styles.mdPreCode, children: block.text }),
+					].filter(Boolean))
+					case 'heading': return h(`h${Math.min(block.level + 2, 6)}`, { key, style: styles.mdHeading }, renderInlineText(block.text, key))
+					case 'hr': return h('hr', { key, style: styles.mdHr })
+					case 'quote': return h('blockquote', { key, style: styles.mdQuote }, renderInlineText(block.text, key))
+					case 'list': return h(block.ordered ? 'ol' : 'ul', { key, style: styles.mdList }, block.items.map((item, itemIndex) => h('li', {
+						key: `li-${itemIndex}`,
+						style: item.indent > 0 ? { marginLeft: `${Math.min(item.indent, 8) * 6}px` } : undefined,
+						children: renderInlineText(item.text, `${key}-li-${itemIndex}`),
+					})))
+					case 'table': return h('table', { key, style: styles.mdTable }, [
+						h('thead', { key: 'head', children: h('tr', { children: block.header.map((cell, cellIndex) => h('th', {
+							key: `h-${cellIndex}`, style: styles.mdTh, children: renderInlineText(cell, `${key}-h-${cellIndex}`),
+						})) }) }),
+						h('tbody', { key: 'body', children: block.rows.map((row, rowIndex) => h('tr', {
+							key: `r-${rowIndex}`,
+							children: row.map((cell, cellIndex) => h('td', {
+								key: `c-${cellIndex}`, style: styles.mdTd, children: renderInlineText(cell, `${key}-r-${rowIndex}-c-${cellIndex}`),
+							})),
+						})) }),
+					])
+					case 'paragraph': return h('p', { key, style: styles.mdParagraph }, renderInlineText(block.text, key))
+					default: return null
+				}
+			})
 		}
 
 		// ── HTTP ─────────────────────────────────────────────────────────────
@@ -1069,7 +1269,7 @@ window.__ModuleLoader__.load({
 					}
 					const opacity = item.replay ? { opacity: 0.72 } : {}
 					if (item.type === 'assistant-text') {
-						streamNodes.push(h('div', { key: `a-${item.seq}`, style: { ...styles.message, ...opacity }, children: item.text }))
+						streamNodes.push(h('div', { key: `a-${item.seq}`, style: { ...styles.messageMd, ...opacity }, children: renderMarkdownNodes(item.text) }))
 					} else if (item.type === 'user-text') {
 						streamNodes.push(h('div', { key: `u-${item.seq}`, style: { ...styles.messageUser, ...opacity }, children: item.text }))
 					} else if (item.type === 'thinking') {
@@ -1444,6 +1644,9 @@ window.__ModuleLoader__.load({
 		exports.mergeEvents = mergeEvents
 		exports.groupEvents = groupEvents
 		exports.collectToolCards = collectToolCards
+		exports.parseMarkdown = parseMarkdown
+		exports.parseInline = parseInline
+		exports.splitTableRow = splitTableRow
 		exports.flattenSelectValues = flattenSelectValues
 		exports.toolInputSummary = toolInputSummary
 		exports.latestCommands = latestCommands

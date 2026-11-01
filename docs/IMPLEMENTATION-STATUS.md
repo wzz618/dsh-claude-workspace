@@ -262,6 +262,9 @@ sessionId 路由事件与权限，不需要额外锁。
 - **图片附件**：选择图片后转 base64 作为 ACP image block，最多 4 张、每张 ≤2 MB；
   **超过 2 MB 时先用 canvas 等比缩放到长边 ≤2048 并重编码**（PNG 首轮保透明，
   仍超限退回 JPEG，最多 4 轮）；缩不到预算才报错。发送后清空
+- **assistant Markdown**：控制台的助手文本改为渲染标题、列表、表格（含 GFM 分隔行）、
+  代码块、引用、分隔线与行内 code/strong/em/strike/链接；链接只允许 http(s)/mailto，
+  其余按文本显示，不解释原始 HTML
 - **子 agent 工具树**：解析 ACP 扩展 `_meta.claudeCode.parentToolUseId`，映射为
   `ToolCard.parentToolCallId`；控制台把子 agent 的工具卡嵌套在启动它的
   `Agent`/`Task` 卡内（左侧竖线、自动展开，父卡显示 `子 agent · N` 徽标）。

@@ -213,3 +213,56 @@ test('tool cards keep the latest state once and nest subagent children under the
   assert.deepEqual(tree.childrenByParent.get('agent')!.map((card) => card.toolCallId), ['child'])
   assert.equal(tree.childrenByParent.has('orphan'), false)
 })
+
+const parseMarkdown = client.parseMarkdown as (text: string) => Array<Record<string, unknown>>
+const parseInline = client.parseInline as (text: string) => Array<Record<string, unknown>>
+const splitTableRow = client.splitTableRow as (line: string) => string[]
+
+test('Markdown blocks cover headings, fences, lists, tables, quotes, and paragraphs', () => {
+  const blocks = parseMarkdown([
+    '# Title',
+    '',
+    '| 名称 | 类型 |',
+    '|------|------|',
+    '| `.claude/` | 目录 |',
+    '| `README.md` | 文件 |',
+    '',
+    '需要我查看某个文件的内容吗？',
+    '',
+    '- one',
+    '- two',
+    '',
+    '```sh',
+    'echo hi',
+    '```',
+    '',
+    '> quoted',
+    '',
+    '---',
+  ].join('\n'))
+  assert.deepEqual(blocks.map((block) => block.type), [
+    'heading', 'table', 'paragraph', 'list', 'code', 'quote', 'hr',
+  ])
+  assert.deepEqual(blocks[1], {
+    type: 'table',
+    header: ['名称', '类型'],
+    rows: [['`.claude/`', '目录'], ['`README.md`', '文件']],
+  })
+  assert.deepEqual(blocks[3], { type: 'list', ordered: false, items: [{ indent: 0, text: 'one' }, { indent: 0, text: 'two' }] })
+  assert.equal(blocks[4]!.lang, 'sh')
+  assert.equal(blocks[4]!.text, 'echo hi')
+})
+
+test('Markdown inline parsing handles code, emphasis, strike, and links', () => {
+  const tokens = parseInline('use `pwd` **now** and *carefully* ~~maybe~~ [docs](https://example.com)')
+  assert.deepEqual(tokens.map((token) => token.type), [
+    'text', 'code', 'text', 'strong', 'text', 'em', 'text', 'strike', 'text', 'link',
+  ])
+  assert.deepEqual(tokens[1], { type: 'code', text: 'pwd' })
+  assert.deepEqual(tokens[9], { type: 'link', text: 'docs', href: 'https://example.com' })
+})
+
+test('table rows split without the framing pipes', () => {
+  assert.deepEqual(splitTableRow('| a | b |'), ['a', 'b'])
+  assert.deepEqual(splitTableRow('a|b'), ['a', 'b'])
+})
