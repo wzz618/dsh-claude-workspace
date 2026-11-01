@@ -336,3 +336,43 @@ test('a crash with a pending approval expires it and is audited', async () => {
     await context.cleanup()
   }
 })
+
+test('a never-used session is replaced when the agent cannot reload it', async () => {
+  const context = await setup('load-fail')
+  try {
+    const opened = await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    assert.equal(opened.resumed, false)
+    assert.equal(opened.binding.acpSessionId, 'acp-session-1')
+
+    const reopened = await context.service.reconnectSession('dsh-1')
+    assert.equal(reopened.replaced, true)
+    assert.equal(reopened.resumed, false)
+    assert.equal(typeof reopened.binding.acpSessionId, 'string')
+    const reattach = await context.service.reattach('dsh-1')
+    assert.equal(reattach.state, 'ready')
+
+    // The replacement session accepts work like any fresh session.
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'create a.txt' })
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending.requestId, 'allow-once')
+    const outcome = await prompt
+    assert.equal(outcome.stopReason, 'end_turn')
+    assert.equal(await readFile(join(context.workspaceDir, 'a.txt'), 'utf8'), 'hello\n')
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('a session with a completed turn still reports a reload failure', async () => {
+  const context = await setup('load-fail')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'create a.txt' })
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending.requestId, 'allow-once')
+    await prompt
+    await assert.rejects(context.service.reconnectSession('dsh-1'), /could not reload Claude Code session/)
+  } finally {
+    await context.cleanup()
+  }
+})

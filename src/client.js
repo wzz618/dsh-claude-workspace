@@ -104,6 +104,7 @@ window.__ModuleLoader__.load({
 			widenCancel: '取消放宽',
 			turnFinished: '回合结束',
 			sessionOpened: '会话已打开',
+			sessionReplaced: '原 Claude 会话无法恢复，已新建一个空会话',
 			diffTruncated: 'diff 过大，仅显示统计',
 			changedLines: '行变更',
 			attachFile: '@ 文件',
@@ -198,6 +199,7 @@ window.__ModuleLoader__.load({
 			widenCancel: 'Cancel widen',
 			turnFinished: 'Turn finished',
 			sessionOpened: 'Session opened',
+			sessionReplaced: 'The previous Claude session could not be restored; a new empty session was created',
 			diffTruncated: 'diff too large; showing counts only',
 			changedLines: 'line changes',
 			attachFile: '@ file',
@@ -1107,7 +1109,7 @@ window.__ModuleLoader__.load({
 				const openSession = () => run(async () => {
 					const result = await post('/sessions/open', { workspaceId, dshSessionId: sessionId })
 					setOpened(true)
-					setNotice(t('sessionOpened'))
+					setNotice(result.replaced === true ? t('sessionReplaced') : t('sessionOpened'))
 					sinceRef.current = 0
 					setEvents([])
 					setPending([])
@@ -1180,7 +1182,7 @@ window.__ModuleLoader__.load({
 							: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
 						if (shape !== null && shape !== undefined) setOptions(shape)
 						setOpened(true)
-						setNotice(t('sessionOpened'))
+						setNotice(result.replaced === true ? t('sessionReplaced') : t('sessionOpened'))
 					} catch (failure) {
 						setError(failure.message)
 					} finally {

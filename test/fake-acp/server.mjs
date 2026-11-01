@@ -294,6 +294,10 @@ rl.on('line', (line) => {
         break
       }
       case 'session/load': {
+        if (scenario === 'load-fail') {
+          respondError(message.id, 'Resource not found. Start a new session.')
+          break
+        }
         const sessionId = message.params.sessionId
         sessions.set(sessionId, { cwd: message.params.cwd })
         notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'previous answer' } })

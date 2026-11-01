@@ -78,6 +78,8 @@ export interface OpenSessionInput {
 export interface OpenSessionResult {
   readonly binding: CcwSessionBinding
   readonly resumed: boolean
+  /** True when the stored ACP session could not be reloaded and a fresh one replaced it. */
+  readonly replaced?: boolean
   readonly modes?: SessionModeState
   readonly configOptions: readonly SessionConfigOption[]
 }
@@ -493,7 +495,36 @@ export class CcwService {
       if (existing !== undefined && existing.acpSessionId !== undefined) {
         this.#remember(existing, input.dshSessionId)
         if (!client.hasSession(existing.acpSessionId)) {
-          await this.#load(client, existing)
+          try {
+            await this.#load(client, existing)
+          } catch (error) {
+            // A session that never completed a turn has no Agent-side context
+            // to preserve: a process restart can leave nothing to load. Replace
+            // it with a fresh ACP session instead of blocking the console.
+            if (existing.lastTurnAt !== undefined) throw error
+            const created = await client.newSession({ cwd, mcpServers: [] })
+            const updated = await this.#sessions.update(input.dshSessionId, {
+              acpSessionId: created.sessionId,
+              needsLoad: false,
+            })
+            this.#acpToDsh.delete(existing.acpSessionId)
+            this.#remember(updated, input.dshSessionId)
+            this.#sessionOptions.set(input.dshSessionId, {
+              ...(created.modes === undefined ? {} : { modes: created.modes }),
+              configOptions: created.configOptions ?? [],
+            })
+            if (input.model !== undefined) await this.#setConfig(client, created.sessionId, 'model', input.model)
+            if (input.effort !== undefined) await this.#setConfig(client, created.sessionId, 'effort', input.effort)
+            if (input.mode !== undefined) await this.#setConfig(client, created.sessionId, 'mode', input.mode)
+            await this.#touchWorkspace(workspace.id)
+            return {
+              binding: updated,
+              resumed: false,
+              replaced: true,
+              ...(created.modes === undefined ? {} : { modes: created.modes }),
+              configOptions: created.configOptions ?? [],
+            }
+          }
         }
         const updated = await this.#applyOptions(existing, input)
         const cached = this.#sessionOptions.get(input.dshSessionId)
