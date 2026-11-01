@@ -19,6 +19,7 @@ export const CCW_HTTP_PATHS = [
   '/api/dsh-claude-workspace/sessions/prompt',
   '/api/dsh-claude-workspace/sessions/cancel',
   '/api/dsh-claude-workspace/sessions/option',
+  '/api/dsh-claude-workspace/sessions/options',
   '/api/dsh-claude-workspace/sessions/reattach',
   '/api/dsh-claude-workspace/approvals',
   '/api/dsh-claude-workspace/approvals/answer',
@@ -164,6 +165,8 @@ async function dispatch(
           requiredValue(body, 'value'),
         ),
       }
+    case 'GET /api/dsh-claude-workspace/sessions/options':
+      return { options: service.sessionOptions(requiredString(url.searchParams, 'dshSessionId')) ?? null }
     case 'POST /api/dsh-claude-workspace/sessions/reattach':
       return service.reattach(
         requiredString(body, 'dshSessionId'),

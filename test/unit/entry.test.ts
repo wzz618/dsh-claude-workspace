@@ -28,8 +28,11 @@ test('apply registers every HTTP route and disposes the service', async () => {
     const ctx = {
       get: () => undefined,
       inject: (names: readonly string[], callback: (scope: Record<string, unknown>) => void) => {
-        assert.deepEqual([...names], ['webServer'])
-        callback({ webServer: { register: (route: ExactRoute) => routes.push(route) } })
+        if (names.includes('webServer')) {
+          callback({ webServer: { register: (route: ExactRoute) => routes.push(route) } })
+          return
+        }
+        callback({})
       },
       effect: (callback: () => () => void) => {
         dispose = callback()

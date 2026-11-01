@@ -14,7 +14,6 @@ interface CordisContext {
   inject?(names: readonly string[], callback: (scope: CordisContext) => void): void
   effect?(callback: () => () => void, label?: string): void
   webServer?: { register(route: ExactRoute): void }
-  workspaceController?: WorkspaceControllerLike
   logger?(name: string): { info(message: string): void; warn(message: string): void; error(message: string): void }
 }
 
@@ -62,12 +61,22 @@ export function apply(ctx: CordisContext, config: CcwConfigInput = {}): void {
     ...(controller === undefined ? {} : { workspaceController: controller }),
   })
 
+  // The workspace controller commonly loads after this row; attach when it
+  // appears so workspaces created earlier are registered too.
+  if (controller === undefined && typeof ctx.inject === 'function') {
+    ctx.inject(['workspaceController'], (scope) => {
+      const attached = readService<WorkspaceControllerLike>(scope, 'workspaceController')
+      if (attached !== undefined) void service.attachWorkspaceController(attached)
+    })
+  }
+
   const attachServer = (scope: CordisContext): void => {
     if (scope.webServer !== undefined) registerCcwHttp(service, (route) => scope.webServer!.register(route))
     else ctx.logger?.('dsh-claude-workspace').warn('webServer is unavailable; the CCW API is not mounted')
   }
-  if (ctx.webServer !== undefined) {
-    attachServer(ctx)
+  const webServer = readService<NonNullable<CordisContext['webServer']>>(ctx, 'webServer')
+  if (webServer !== undefined) {
+    attachServer({ webServer })
   } else if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => attachServer(scope))
   } else {
@@ -88,8 +97,8 @@ export function apply(ctx: CordisContext, config: CcwConfigInput = {}): void {
 }
 
 function readService<T>(ctx: CordisContext, name: string): T | undefined {
-  const fromContext = ctx[name as keyof CordisContext]
-  if (fromContext !== undefined) return fromContext as T
+  // Optional services MUST be read through ctx.get(); the property proxy
+  // rejects names the fiber did not declare in `inject`.
   return typeof ctx.get === 'function' ? (ctx.get(name) as T | undefined) : undefined
 }
 

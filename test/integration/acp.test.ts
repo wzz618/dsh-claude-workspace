@@ -182,6 +182,8 @@ test('a restarted service reloads the binding and marks replay events', async ()
         model: 'opus',
       })
       assert.equal(opened.resumed, true)
+      assert.ok(opened.configOptions.some((option) => option.id === 'model'))
+      assert.equal(opened.modes?.availableModes.length, 3)
       assert.ok(events.length >= 2)
       assert.ok(events.every((event) => event.replay))
       assert.ok(events.some((event) => event.type === 'assistant-text'))

@@ -23,6 +23,48 @@ let nextServerId = 1000
 let sessionCounter = 0
 const pendingServer = new Map()
 
+const modesState = {
+  currentModeId: 'default',
+  availableModes: [
+    { id: 'default', name: 'Default' },
+    { id: 'acceptEdits', name: 'Accept edits' },
+    { id: 'plan', name: 'Plan' },
+  ],
+}
+
+const configOptions = [
+  {
+    id: 'model',
+    name: 'Model',
+    type: 'select',
+    currentValue: 'sonnet',
+    options: [
+      { value: 'sonnet', name: 'Sonnet' },
+      { value: 'opus', name: 'Opus' },
+    ],
+  },
+  {
+    id: 'effort',
+    name: 'Effort',
+    type: 'select',
+    currentValue: 'medium',
+    options: [
+      { value: 'medium', name: 'Medium' },
+      { value: 'high', name: 'High' },
+    ],
+  },
+  {
+    id: 'mode',
+    name: 'Mode',
+    type: 'select',
+    currentValue: 'default',
+    options: [
+      { value: 'default', name: 'Default' },
+      { value: 'acceptEdits', name: 'Accept edits' },
+    ],
+  },
+]
+
 const rl = createInterface({ input: process.stdin })
 
 function send(message) {
@@ -145,46 +187,8 @@ rl.on('line', (line) => {
         sessions.set(sessionId, { cwd: message.params.cwd })
         respond(message.id, {
           sessionId,
-          modes: {
-            currentModeId: 'default',
-            availableModes: [
-              { id: 'default', name: 'Default' },
-              { id: 'acceptEdits', name: 'Accept edits' },
-              { id: 'plan', name: 'Plan' },
-            ],
-          },
-          configOptions: [
-            {
-              id: 'model',
-              name: 'Model',
-              type: 'select',
-              currentValue: 'sonnet',
-              options: [
-                { value: 'sonnet', name: 'Sonnet' },
-                { value: 'opus', name: 'Opus' },
-              ],
-            },
-            {
-              id: 'effort',
-              name: 'Effort',
-              type: 'select',
-              currentValue: 'medium',
-              options: [
-                { value: 'medium', name: 'Medium' },
-                { value: 'high', name: 'High' },
-              ],
-            },
-            {
-              id: 'mode',
-              name: 'Mode',
-              type: 'select',
-              currentValue: 'default',
-              options: [
-                { value: 'default', name: 'Default' },
-                { value: 'acceptEdits', name: 'Accept edits' },
-              ],
-            },
-          ],
+          modes: modesState,
+          configOptions,
         })
         break
       }
@@ -193,7 +197,7 @@ rl.on('line', (line) => {
         sessions.set(sessionId, { cwd: message.params.cwd })
         notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'previous answer' } })
         notify(sessionId, { sessionUpdate: 'tool_call', toolCallId: 't-old', title: 'Read file', kind: 'read', status: 'completed' })
-        respond(message.id, {})
+        respond(message.id, { modes: modesState, configOptions })
         break
       }
       case 'session/prompt':

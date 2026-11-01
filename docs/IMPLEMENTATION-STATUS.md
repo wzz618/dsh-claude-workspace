@@ -10,7 +10,7 @@
 |---|---|---|
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
-| P2 呈现层 | 骨架 | 设置页控制面（工作区/会话/审批/规则）+ loopback API；**未**接管 `agent-loop`、无会话视图/工具卡/diff 卡/权限 Dock/回放分隔。 |
+| P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
 | P3 远程 | 部分 | `HostOps` ssh 实现、`ssh -T` stdio、keepalive、探测、远端建目录；未做远端写设置（「放宽」在远程被明确拒绝）。**远端尚未真机回归。** |
 | P4 细节对齐 | 未开始 | 会话树、子 agent、斜杠命令、@ 文件、图片 UI、模型/effort 选择器（API 已有）。 |
 | P5 硬化 | 部分 | 原子写、审计、审计保留、行/输出上限；未做打包发布、兼容矩阵 CI。 |
@@ -21,14 +21,14 @@
 |---|---|---|
 | 1 | 骨架 + bundle patch（禁用 `agent-loop` / `ui-model-selection`，插自己的行） | 部分：`package.json`、`cordis.patch.yml`、`apply()` 可加载；**只插入插件行**，两行未禁用（P1 不接管会话，禁用会让普通会话失去 loop）。`--dump-config` 未在本机 DSH 环境验证。 |
 | 2 | Host ACP 客户端 + workspace store（本地） | 完成：`config`、`host/*`、`acp/*`、`workspace/*`、`gate/*`、`audit`、`service`；用假 ACP 全流程验证。 |
-| 3 | 客户端 UI：会话视图 + 工具卡 + 权限 Dock | 骨架：`src/client.js` 注册 `settings.section`，提供工作区/主机/会话/审批/规则操作；工具卡与 Dock 待 P2。 |
+| 3 | 客户端 UI：会话视图 + 工具卡 + 权限 Dock | P2a：`src/client.js` 注册右侧栏 tab type（`sidebar.right.pane.tab` / `.title`）与会话控制台；设置页保留管理功能。DSH 会话内联呈现仍待 P2b。 |
 | 4 | remote HostOps + 健康检查 | 本地真机完成；ssh 分支有代码与单测，**未在 ssh 目标上真机回归**；默认 no-cd 形态与 `cd … && exec` 形态都支持。 |
 | 5 | 恢复/并发/中断 | 完成：`session/load` 重放标记、load 后重设 model/effort、同工作区双会话权限路由、`session/cancel` → 卡片 `cancelled`。假 ACP 验证。 |
 | 6 | 硬化与打包 | 部分：原子写、`.bak`、回读校验、损坏 JSON 拒绝、审计、行上限、输出上限；冲突检测/安装卸载验证待 P2。 |
 
 ## 已验证行为（自动化）
 
-`npm test`：99 个用例全部通过。
+`npm test`：107 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -63,6 +63,33 @@
 1. Claude 2.1.314 的「don't ask again」是 `kind: "allow_always"` + `optionId: "allow-with-updates"`，不是计划表格里的 `kind: "allow_with_updates"`；`findAllowWithUpdates` 现同时识别两种。
 2. 取消后 agent 仍会发 `tool_call_update status=failed`；卡片的 `cancelled` 必须是终态，已在事件合并中固定。
 3. 本地 ACP 进程必须以工作区目录为 cwd 启动，否则可能读不到项目级 `.claude/settings.json`；`spawnAcp(cwd)` 已接通（远程仍按 B7 不 `cd`）。
+
+## P2a 右侧栏会话控制台（2026-11-01）
+
+已实现于 `src/client.js`：
+
+- 右侧栏 tab type `claude-workspace`，通过右侧栏引导页打开
+- 会话流：assistant/user/thinking、工具卡（`toolCallId` 身份、状态机）、diff hunks、计划卡
+- 权限 Dock：Claude 原生选项原样展示；放宽预览/落盘/允许；高风险提示
+- 模型 / 思考强度 / 模式选择器（来自 `configOptions`）
+- 停止按钮、历史回放分隔与灰化、待审批计数（tab 标题）
+- Host 侧新增 `GET /sessions/options`，缓存 new/load 返回的 `configOptions`/`modes`
+
+真实 Web profile 验证（隔离 `DSH_HOME`，`dsh-base` + `dsh-web-app` + 本插件）：
+
+- 插件激活无 "did not activate" 警告
+- `GET /api/dsh-claude-workspace/status` → `registryAvailable: true`
+- `POST /workspaces/create` → 记录带 `dshWorkspaceId`（工作区已登记进 DSH）
+- 页面 boot 模块列表包含 `dsh-claude-workspace/client.js`，右侧栏 slot 注册由客户端单测覆盖
+
+本轮真实启动发现并修复：
+
+1. 直接读 `ctx.workspaceController` 触发 Cordis “cannot get property without inject”；可选服务全部改为 `ctx.get(name)`。
+2. `workspaceController` 晚于本插件加载，`apply` 时读到 `undefined`；新增 `attachWorkspaceController()`，在服务出现后登记并回填已有工作区。
+
+未验证：真实浏览器内的点击/渲染（当前环境没有 headless browser）；客户端注册与纯函数由 `test/unit/client.test.ts` 覆盖。
+
+剩余 P2b：接管 `agent-loop` / `ui-model-selection`。DSH 0.2.x 的 `AgentLoop` 通过 `private` 的 `initializeAgent`/发布流程创建 Agent，`@zaimokuza/dsh-acp-adapter` 用绑定 0.1.1-rc.2 的 host-compat 影子层绕开；这需要一次单独 spike，不能直接复用 P2a 的独立控制台。
 
 ### DSH Loader 装配（隔离环境）
 
@@ -109,7 +136,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 ## 下一步（建议顺序）
 
 1. **P1 真机回归**：本机已完成本地 `test:real` 全流程；剩余 `dsh plugin --profile <test> add <路径>` + `--dump-config` 的插件加载验证（会改 `~/.dsh`，本轮未执行）与 ssh 目标真机回归。
-2. **P2 接管 agent-loop**：实现 `agent-loop` 子类/工厂、`setFactory` 冲突检测、`ui-model-selection` 替换；把 `src/client.js` 从设置页控制面迁到 `conversation.*` 工具卡与权限 Dock。
+2. **P2b 接管 agent-loop**：先做 Q8 spike（DSH 0.2.x 的私有发布流程 vs 适配器的 host-compat）；实现后补 `setFactory` 冲突检测、替换 `ui-model-selection`，再考虑把 P2a 控制台迁入会话内联呈现。
 3. **P3 远程设置桥**：为 `HostOps` 增加读/原子写文件能力，解除远程 widen 限制，并在 ssh 断线时按 workspace 标 `expired`（已按 workspace 过滤）。
 4. **P4**：终端 PTY、子 agent、`/` 命令、`@` 文件、图片预算。
 5. **P5**：并发/断线回归脚本、打包与安装/卸载残留检查、Linux 本地/远端矩阵。

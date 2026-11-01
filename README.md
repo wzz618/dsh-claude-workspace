@@ -2,7 +2,7 @@
 
 给 DeepSeek Harness 用的「Claude Code 工作区」插件：按 DSH 工作区管理本地或 SSH 主机上的 Claude Code 会话，通过 ACP（Agent Client Protocol）保留 Claude 自己的工具、权限选项、diff、计划与模式，并把每次权限决定写入审计。
 
-本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ 完整骨架**。P2–P5（agent-loop 接管、会话视图、工具卡、diff 卡、远程「放宽」写规则等）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
+本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）**。P2b 的 agent-loop 接管、以及 P3–P5（远程「放宽」写规则、子 agent、发布硬化等）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
 
 ## 它做什么
 
@@ -11,6 +11,7 @@
 - **权限**：Claude 给什么选项就展示什么（`allow_once` / `allow-with-updates` / `reject…`），原样回传；额外提供「放宽」：本命令 / 命令前缀 / 本工具。默认审批**永不超时**。
 - **远程**：`ssh -T -o BatchMode=yes -- <alias> claude-agent-acp` 直接承载 stdio，不暴露端口、不写桥、不要求目标机装 DSH。
 - **审计**：`<dataDir>/audit/YYYY-MM-DD.jsonl`，只记元数据（主机、工作区、会话、工具、参数摘要、决定、耗时）。
+- **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、历史回放分隔与待审批计数；设置页保留主机/工作区/规则管理。
 
 不处理 Claude 登录/凭据：目标机上的 `claude` 必须已经登录。插件不读取、不缓存、不转发任何凭据。
 
@@ -173,7 +174,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ```sh
 npm install
 npm run typecheck      # src + test
-npm test               # 99 个用例：单元 + 假 ACP 集成 + HTTP + 入口
+npm test               # 107 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
 npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run build          # tsc -> lib/，并复制浏览器半区
@@ -200,7 +201,7 @@ src/
 ├── service.ts             # Host 侧编排（传输无关）
 ├── http.ts                # loopback HTTP API
 ├── index.ts               # DSH/Cordis 入口
-└── client.js              # 浏览器半区骨架（settings.section）
+└── client.js              # 浏览器半区：settings.section + 右侧栏会话控制台
 ```
 
 ## 许可证与致谢

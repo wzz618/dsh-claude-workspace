@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import type {
+  LoadSessionResult,
   PermissionOutcome,
   PromptResult,
   RequestPermissionParams,
@@ -135,7 +136,7 @@ export class CcwService {
   readonly #config: ResolvedConfig
   readonly #workspaces: WorkspaceStore
   readonly #sessions: SessionStore
-  readonly #registry: WorkspaceRegistry
+  #registry: WorkspaceRegistry
   readonly #hosts = new Map<string, HostOps>()
   readonly #hostFactory: ((id: string) => HostOps) | undefined
   readonly #pool: AcpPool
@@ -154,6 +155,7 @@ export class CcwService {
   readonly #replaying = new Set<string>()
   readonly #running = new Map<string, RunningState>()
   readonly #sessionRules = new Map<string, string[]>()
+  readonly #sessionOptions = new Map<string, { modes?: SessionModeState; configOptions: readonly SessionConfigOption[] }>()
   readonly #listeners = new Set<(event: CcwHostEvent) => void>()
   #closed = false
 
@@ -206,6 +208,32 @@ export class CcwService {
   /** True when DSH's workspace registry is available. */
   get registryAvailable(): boolean {
     return this.#registry.available
+  }
+
+  /**
+   * Attaches DSH's workspace controller once the service appears.
+   *
+   * The controller usually loads after this plugin, so `apply` cannot read it
+   * at construction. Active workspaces created while only the plugin registry
+   * existed are registered now; a failure leaves that workspace unregistered
+   * and reports through its record rather than dropping it.
+   *
+   * @param controller - `ctx.workspaceController` surface.
+   */
+  async attachWorkspaceController(controller: WorkspaceControllerLike): Promise<void> {
+    if (this.#registry.available) return
+    this.#registry = new DshWorkspaceRegistry(controller)
+    for (const workspace of await this.#workspaces.listActive()) {
+      if (workspace.dshWorkspaceId !== undefined) continue
+      try {
+        const registration = await this.#registry.register({ path: workspace.dir, title: workspace.title })
+        if (registration !== undefined) {
+          await this.#workspaces.update(workspace.id, { dshWorkspaceId: registration.id })
+        }
+      } catch {
+        // Keep the directory and record; a later create/add retries registration.
+      }
+    }
   }
 
   /** Subscribes to Host events; returns an unsubscribe function. */
@@ -355,7 +383,13 @@ export class CcwService {
           await this.#load(client, existing)
         }
         const updated = await this.#applyOptions(existing, input)
-        return { binding: updated, resumed: true, configOptions: [] }
+        const cached = this.#sessionOptions.get(input.dshSessionId)
+        return {
+          binding: updated,
+          resumed: true,
+          ...(cached?.modes === undefined ? {} : { modes: cached.modes }),
+          configOptions: cached?.configOptions ?? [],
+        }
       }
       const created = await client.newSession({ cwd, mcpServers: [] })
       const binding: CcwSessionBinding = {
@@ -373,6 +407,10 @@ export class CcwService {
       await this.#sessions.upsert(binding)
       this.#remember(binding, input.dshSessionId)
       this.#ensureTranslator(input.dshSessionId, created.sessionId, 0)
+      this.#sessionOptions.set(input.dshSessionId, {
+        ...(created.modes === undefined ? {} : { modes: created.modes }),
+        configOptions: created.configOptions ?? [],
+      })
       if (input.model !== undefined) await this.#setConfig(client, created.sessionId, 'model', input.model)
       if (input.effort !== undefined) await this.#setConfig(client, created.sessionId, 'effort', input.effort)
       if (input.mode !== undefined) await this.#setConfig(client, created.sessionId, 'mode', input.mode)
@@ -382,8 +420,7 @@ export class CcwService {
         resumed: false,
         ...(created.modes === undefined ? {} : { modes: created.modes }),
         configOptions: created.configOptions ?? [],
-      }
-    } catch (error) {
+      }    } catch (error) {
       if (error instanceof CcwError) throw error
       throw new CcwError(
         'session-open-failed',
@@ -626,8 +663,23 @@ export class CcwService {
     if (configId === 'model' && typeof value === 'string') patch.model = value
     if (configId === 'effort' && typeof value === 'string') patch.effort = value
     if (configId === 'mode' && typeof value === 'string') patch.mode = value
+    const cached = this.#sessionOptions.get(dshSessionId)
+    if (cached !== undefined) {
+      this.#sessionOptions.set(dshSessionId, {
+        ...cached,
+        configOptions: cached.configOptions.map((option) =>
+          option.id === configId ? { ...option, currentValue: value } : option),
+      })
+    }
     if (Object.keys(patch).length === 0) return binding
     return this.#sessions.update(dshSessionId, patch)
+  }
+
+  /** Latest config options and modes reported by the agent for one session. */
+  sessionOptions(
+    dshSessionId: string,
+  ): { readonly modes?: SessionModeState; readonly configOptions: readonly SessionConfigOption[] } | undefined {
+    return this.#sessionOptions.get(dshSessionId)
   }
 
   /** Latest plan for one session. */
@@ -763,10 +815,21 @@ export class CcwService {
     const translator = this.#translatorFor(binding.dshSessionId)
     this.#replaying.add(binding.dshSessionId)
     try {
-      await client.loadSession({ sessionId: binding.acpSessionId, cwd: binding.cwd, mcpServers: [] })
+      const result: LoadSessionResult = await client.loadSession({
+        sessionId: binding.acpSessionId,
+        cwd: binding.cwd,
+        mcpServers: [],
+      })
+      const previous = this.#sessionOptions.get(binding.dshSessionId)
+      const modes = result.modes ?? previous?.modes
+      this.#sessionOptions.set(binding.dshSessionId, {
+        ...(modes === undefined ? {} : { modes }),
+        configOptions: result.configOptions ?? previous?.configOptions ?? [],
+      })
       await this.#reapplyOptions(client, binding)
       await this.#sessions.update(binding.dshSessionId, { needsLoad: false })
-      void translator    } catch (error) {
+      void translator
+    } catch (error) {
       await this.#sessions.update(binding.dshSessionId, { needsLoad: true }).catch(() => undefined)
       throw new CcwError(
         'session-load-failed',
