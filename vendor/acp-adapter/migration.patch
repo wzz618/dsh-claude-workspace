@@ -1,0 +1,561 @@
+diff -ruN a/cordis.patch.yml b/cordis.patch.yml
+--- a/cordis.patch.yml	1985-10-26 16:15:00.000000000 +0800
++++ b/cordis.patch.yml	2026-11-01 19:20:59.000000000 +0800
+@@ -34,5 +34,3 @@
+ # Row ②: the enhanced ACP model picker replaces the built-in
+ # model-selection UI row (dsh-web-app cordis.patch.yml:249-251, no config of
+ # its own, so a plain id-targeted disable suffices).
+-- id: ui-model-selection
+-  disabled: true
+diff -ruN a/lib/client.js b/lib/client.js
+--- a/lib/client.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/client.js	2026-11-01 18:21:52.000000000 +0800
+@@ -12662,7 +12662,6 @@
+ 			"locale",
+ 			"connection",
+ 			"remote",
+-			"settingsScope",
+ 			"commandUi",
+ 			"sessions",
+ 			"workspaces"
+@@ -12671,14 +12670,22 @@
+ 		* Client plugin body: the `acp` settings section with its controller and copy.
+ 		* @param ctx - browser plugin context.
+ 		*/
+-		function apply(ctx) {
++		function applyInner(ctx) {
+ 			const locale = ctx.get("locale");
+ 			ctx.effect(() => locale.register(NS, {
+ 				zh: zh$1,
+ 				en: en$1
+ 			}), "@zaimokuza/dsh-acp-adapter: ACP section dictionaries");
+ 			const connection = ctx.get("connection");
+-			const binder = ctx.get("settingsScope");
++			const binder = ctx.get("settingsScope") ?? {
++				bind: () => ({
++					getSnapshot: () => ({ value: {}, user: {}, base: {}, revision: 0 }),
++					watch: () => () => {},
++					update: async () => {},
++					replace: async () => {},
++					mutate: async () => {}
++				})
++			};
+ 			const scope = binder.bind({
+ 				namespace: ACP_SETTINGS_NS,
+ 				decode: decodeAcpSettings
+@@ -12939,6 +12946,15 @@
+ 			return selection.model;
+ 		}
+ 		//#endregion
++		function apply(ctx) {
++			try {
++				return applyInner(ctx);
++			}
++			catch (error) {
++				console.error("[acp-fork] apply failed", error);
++				throw error;
++			}
++		}
+ 		exports.apply = apply;
+ 		exports.inject = inject;
+ 		return module.exports;
+diff -ruN a/lib/domain/policy/permissions.js b/lib/domain/policy/permissions.js
+--- a/lib/domain/policy/permissions.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/domain/policy/permissions.js	2026-11-01 19:43:24.000000000 +0800
+@@ -59,7 +59,7 @@
+  */
+ import { randomUUID } from 'node:crypto';
+ import { Buffer } from 'node:buffer';
+-import { CallId } from '@deepseek-ai/dsh-llm';
++import { ToolCallId } from '@deepseek-ai/dsh-llm';
+ import { acpUnknownToolName } from "../../protocol/v1/translate.js";
+ import { ACP_METRIC } from "../observability/metrics.js";
+ import { ACP_PERMISSION_AUDIT_KIND, createPermissionAskedAudit, createPermissionDecidedAudit, redactSecretText, } from "./events.js";
+@@ -552,6 +552,12 @@
+                 log('dsh-acp permission broker failed for "' + toolTitle + '" (' + errorMessage(error) + '); responding cancelled (fail closed)', fields('cancelled'));
+             }
+         }
++        else if (deps.policy?.() === 'never') {
++            // Native Agent Access: DSH never asks for approval, so the ACP
++            // bridge grants the once-kind option instead of failing closed.
++            outcome = 'allowed-once';
++            pendingDecision = mapOutcome('allowed-once', params.options);
++        }
+         else if (deps.approval === undefined) {
+             outcome = 'unavailable';
+             log(`dsh-acp permission bridge: no fresh plugin observer or approval service available for "${toolTitle}" (no approval service); responding cancelled (fail closed)`, fields('cancelled'));
+@@ -564,7 +570,7 @@
+                     // 的 request_permission 常不带 name/title——审批 UI 不再显示字面量
+                     // 'unknown-tool'）；fail-closed 语义不变。
+                     toolName: permissionToolName(toolCall),
+-                    callId: CallId(toolCall.toolCallId),
++                    callId: ToolCallId(toolCall.toolCallId),
+                     reason: buildPermissionReason({ ...params, toolCall }),
+                     ...(signal === undefined ? {} : { signal }),
+                 });
+diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
+--- a/lib/domain/session/agent.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/domain/session/agent.js	2026-11-01 19:32:09.000000000 +0800
+@@ -20,8 +20,10 @@
+ /// <reference types="node" />
+ import { realpathSync } from 'node:fs';
+ import process from 'node:process';
+-import { Inbox, agentEvents } from '@deepseek-ai/dsh-agent';
+-import { assertNever, createUserMessage, errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
++import { agentEvents } from '@deepseek-ai/dsh-agent';
++import { Inbox } from './inbox.js';
++import { createUserMessage, errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
++import { assertNever } from '../../util/assert-never.js';
+ import { canonicalHeader, foldRequestHeader, headerEquals } from '@deepseek-ai/dsh-session';
+ import { AcpClientConnection, supportsFork } from "../../protocol/v1/connection.js";
+ import { AcpClientError, acpErrorRef } from "../../protocol/v1/errors.js";
+@@ -279,7 +281,7 @@
+             discarded: (message) => { this.dispatch.emit('agent/inbox/discarded', { message }); },
+             claimed: (message, turn) => { this.dispatch.emit('agent/inbox/claimed', { message, turn }); },
+         });
+-        const lastTurn = session.events.findLast((event) => event.type === 'turn/start')?.data.turn ?? 0;
++        const lastTurn = session.snapshotEvents().findLast((event) => event.type === 'turn/start')?.data.turn ?? 0;
+         this.phase = { kind: 'idle', lastTurn };
+         // 对账基线：必须在任何本 run 自己的说明消息落盘**之前**捕获（
+         // resolveExpectedRange 的区间扩展上界；说明消息省略 sourceEventSeqs 本就不算
+@@ -302,7 +304,7 @@
+         // reconciliation 记录不在此落盘（构造期不能 await，fire-and-forget 无持久化
+         // 保证）——首个被拒的 turn 经 blockError await 落盘（见 turn 闩锁分支）；
+         // 从未 prompt 的 blocked 会话由 health/liveSessions 的 continuity 如实披露。
+-        const historicalProvider = foldRequestHeader(session.events)?.config.provider;
++        const historicalProvider = foldRequestHeader(session.snapshotEvents())?.config.provider;
+         const presetBlocked = driver.presetBlocked
+             ?? (driver.resumeBinding === undefined && session.header.parentSession === undefined
+                 ? historicalProvider === this.providerRoute
+@@ -1436,7 +1438,7 @@
+                 // immutable seed length, so use that boundary for the defense-in-depth
+                 // semantic check as well.  Anything appended after the seed (such as
+                 // the child's turn/start or user input) must not affect eligibility.
+-                const seed = this.session.events.slice(0, forkCandidate.seedLength);
++                const seed = this.session.snapshotEvents().slice(0, forkCandidate.seedLength);
+                 const parentMatches = this.session.header.parentSession === forkCandidate.parentSessionId
+                     && parent.provider === this.providerRoute
+                     // The DSH fork seed may include trailing host-only events (for
+@@ -1544,7 +1546,7 @@
+                 // 无论采用哪种 Agent 恢复方法，先证明 DSH 本地日志仍覆盖 binding 担保区间。
+                 // session/resume 不提供回放，不能也不应伪造跨真源的逐字比较；它以同一
+                 // session id + 启动身份预检 + Agent 成功恢复响应作为语义连续性契约。
+-                const range = resolveExpectedRange(this.session.events, binding.historyBaseSeq, binding.dshCommittedSeq, this.baselineSeq);
++                const range = resolveExpectedRange(this.session.snapshotEvents(), binding.historyBaseSeq, binding.dshCommittedSeq, this.baselineSeq);
+                 if (!range.ok) {
+                     throw await this.blockError(range.cause, range.detail);
+                 }
+@@ -1593,7 +1595,7 @@
+                     // Agent-specific replay projection 差异不应把用户锁在仍可用的原生会话外。
+                     const replayTranslator = this.replayTranslator;
+                     this.replayTranslator = undefined;
+-                    const expected = expectedVisibleHistory(this.session.events, range.from, range.to, this.historyProjectionPolicy);
++                    const expected = expectedVisibleHistory(this.session.snapshotEvents(), range.from, range.to, this.historyProjectionPolicy);
+                     const replay = replayVisibleHistory(replayTranslator?.finish() ?? [], this.historyProjectionPolicy);
+                     const assessment = this.replayOverflowed
+                         ? { status: 'overflow', detail: `session/load replay exceeded the staging limit (>${String(ACP_REPLAY_STAGING_MAX_ENTRIES)} entries or >${String(ACP_REPLAY_STAGING_MAX_CHARS)} chars)` }
+diff -ruN a/lib/domain/session/inbox.js b/lib/domain/session/inbox.js
+--- a/lib/domain/session/inbox.js	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/domain/session/inbox.js	2026-11-01 19:32:09.000000000 +0800
+@@ -0,0 +1,111 @@
++/**
++ * DSH 0.2.x-compatible Inbox shim for the forked ACP adapter.
++ *
++ * The 0.1.x runtime class moved into the agent-loop driver and is no longer
++ * exported. This keeps the adapter's `(session, callbacks)` constructor and the
++ * subset of the contract it calls, recording the same durable
++ * `agent/inbox/spliced` events so the host's inbox projection stays correct.
++ */
++export class Inbox {
++  constructor(session, callbacks = {}) {
++    this.session = session
++    this.callbacks = callbacks
++    this.lists = { 'next-turn': [], 'next-step': [] }
++    for (const event of session.snapshotEvents() || []) this.applyEvent(event)
++  }
++
++  get nextTurn() {
++    return this.lists['next-turn']
++  }
++
++  get nextStep() {
++    return this.lists['next-step']
++  }
++
++  get hasPending() {
++    return this.nextTurn.length > 0 || this.nextStep.length > 0
++  }
++
++  clear() {
++    this.mutate('next-step', 0, this.nextStep.length, [], true)
++    this.mutate('next-turn', 0, this.nextTurn.length, [], true)
++  }
++
++  claim(target, turn) {
++    const claimed = this.mutate('next-step', 0, this.nextStep.length, [], false)
++    if (target === 'next-turn') claimed.push(...this.mutate('next-turn', 0, 1, [], false))
++    for (const message of claimed) this.callbacks.claimed?.(message, turn)
++    return claimed
++  }
++
++  append(target, message) {
++    this.splice(target, this.lists[target].length, 0, [message])
++  }
++
++  prepend(target, message) {
++    this.splice(target, 0, 0, [message])
++  }
++
++  replace(messageId, newMessage) {
++    const location = this.locate(messageId)
++    if (location === undefined) return false
++    this.splice(location.target, location.index, 1, [newMessage])
++    return true
++  }
++
++  remove(messageId) {
++    const location = this.locate(messageId)
++    if (location === undefined) return false
++    this.splice(location.target, location.index, 1, [])
++    return true
++  }
++
++  splice(target, start, deleteCount, inserted) {
++    return this.mutate(target, start, deleteCount, inserted, true)
++  }
++
++  locate(messageId) {
++    for (const target of ['next-turn', 'next-step']) {
++      const index = this.lists[target].findIndex((message) => message.id === messageId)
++      if (index >= 0) return { target, index }
++    }
++    return undefined
++  }
++
++  mutate(target, start, deleteCount, inserted, discardRemoved) {
++    const inbox = this.lists[target]
++    const truncatedStart = Math.trunc(start)
++    const offset = Number.isNaN(truncatedStart) ? 0 : truncatedStart
++    const actualStart = offset < 0 ? Math.max(inbox.length + offset, 0) : Math.min(offset, inbox.length)
++    const truncatedDeleteCount = Math.trunc(deleteCount)
++    const actualDeleteCount = Math.min(
++      Math.max(Number.isNaN(truncatedDeleteCount) ? 0 : truncatedDeleteCount, 0),
++      inbox.length - actualStart,
++    )
++    if (actualDeleteCount === 0 && inserted.length === 0) return []
++    const removed = inbox.slice(actualStart, actualStart + actualDeleteCount)
++    const event = this.session.append('agent/inbox/spliced', {
++      target,
++      start: actualStart,
++      ...(actualDeleteCount === 0 ? {} : { removedCount: actualDeleteCount }),
++      inserted,
++      ...(discardRemoved && removed.length > 0 ? { outcome: 'canceled' } : {}),
++    })
++    this.lists[target] = inbox.toSpliced(actualStart, actualDeleteCount, ...inserted)
++    if (discardRemoved) {
++      for (const message of removed) this.callbacks.discarded?.(message)
++    }
++    for (const message of event.data.inserted) this.callbacks.inserted?.(message)
++    return removed
++  }
++
++  applyEvent(event) {
++    if (event.type !== 'agent/inbox/spliced') return
++    const splice = event.data
++    const inbox = this.lists[splice.target]
++    const removedCount = splice.removedCount ?? 0
++    if (!Number.isSafeInteger(splice.start) || splice.start < 0 || splice.start > inbox.length
++      || splice.start + removedCount > inbox.length) return
++    this.lists[splice.target] = inbox.toSpliced(splice.start, removedCount, ...splice.inserted)
++  }
++}
+diff -ruN a/lib/domain/session/resume.js b/lib/domain/session/resume.js
+--- a/lib/domain/session/resume.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/domain/session/resume.js	2026-11-01 19:32:09.000000000 +0800
+@@ -122,7 +122,7 @@
+  * @returns 被中断的 turn 号；无中断尾巴 → `undefined`。
+  */
+ export function detectInterruptedTail(session) {
+-    const events = session.events;
++    const events = session.snapshotEvents();
+     let index = events.length - 1;
+     while (events[index]?.type === 'session/end-seed')
+         index -= 1;
+@@ -508,7 +508,7 @@
+  * 'dsh-log-diverged'（有未解释的可见事件，拒绝猜）。`baselineSeq` 由调用方在
+  * 追加本 run 自己的说明消息**之前**捕获，把说明消息排除在本检查之外
+  * （说明消息省略 sourceEventSeqs，本就不算可见事件，双保险）。
+- * @param events - session.events（seq 顺序）。
++ * @param events - session.snapshotEvents()（seq 顺序）。
+  * @param historyBaseSeq - binding.historyBaseSeq（本代际可见历史起点，含）。
+  * @param dshCommittedSeq - binding.dshCommittedSeq（担保前缀上界，不含）。
+  * @param baselineSeq - 本 run 追加说明消息前捕获的 session.seq。
+@@ -926,7 +926,7 @@
+  * 只认「无 sourceEventSeqs 且文本全等」的 assistant/message。
+  */
+ export function hasForkBlankNote(session) {
+-    return session.events.some((event) => event.type === 'assistant/message'
++    return session.snapshotEvents().some((event) => event.type === 'assistant/message'
+         && event.sourceEventSeqs === undefined
+         && event.data.message.content.some((block) => block.type === 'text' && block.text === ACP_FORK_BLANK_NOTE));
+ }
+diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/composition/installed-profile-registry.js
+--- a/lib/host/composition/installed-profile-registry.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/host/composition/installed-profile-registry.js	2026-11-01 18:17:29.000000000 +0800
+@@ -31,6 +31,7 @@
+ /// <reference types="node" />
+ import fs from 'node:fs';
+ import path from 'node:path';
++import os from 'node:os';
+ import { FIBER_DISPOSED, FIBER_UNLOADING } from "../../host-compat/fiber-state.js";
+ import { ACP_AGENT_IDS, ACP_AGENT_ID_PATTERN, ACP_SETTINGS_NS, acpAgentIdFromRoute, acpRouteId, descriptorOf, diffAcpAgentConfigs, } from "../../domain/session/agent-config.js";
+ import { createAcpLogger } from "../../domain/observability/logging.js";
+@@ -349,23 +350,27 @@
+             log.warn(`dsh-acp: agent config change audit failed (${error instanceof Error ? error.message : String(error)})`, { operation: 'audit', result: 'error' });
+         }
+     };
+-    ctx.inject(['settings', 'llm'], (sctx) => {
+-        const settings = sctx.get('settings');
+-        // The namespace registration rides this inject fiber: the settings service
+-        // detaching withdraws it (and its watchers) automatically.
+-        const scope = settings.register(ACP_SETTINGS_NS, acpSettingsSchema);
+-        agents = scope.get().agents;
++    ctx.inject(['llm'], () => {
++        // For the CCW fork, ACP profiles are seeded from a host-local JSON file;
++        // the upstream settings namespace API no longer exists on DSH 0.2.x.
++        const home = process.env.DSH_HOME ?? path.join(os.homedir(), '.dsh');
++        const file = path.join(home, 'dsh-acp', 'agents.json');
++        let stored = {};
++        try {
++            stored = JSON.parse(fs.readFileSync(file, 'utf8'));
++        }
++        catch { /* no seeded profiles */ }
++        const next = {};
++        for (const [id, raw] of Object.entries(stored.agents ?? {})) {
++            try {
++                next[id] = agentConfigOf(id, raw);
++            }
++            catch (error) {
++                log.error(`dsh-acp: invalid agent "${id}" in ${file}: ${error instanceof Error ? error.message : String(error)}`);
++            }
++        }
++        agents = next;
+         onSettingsChange();
+-        scope.watch((next) => {
+-            // A stored change landing while the plugin unloads must not re-register
+-            // routes against a fiber whose resources are being released.
+-            if (isUnloading(ctx))
+-                return;
+-            const prev = agents;
+-            agents = next.agents;
+-            auditConfigChanges(prev, next.agents);
+-            onSettingsChange();
+-        });
+     });
+     return {
+         adapter,
+diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
+--- a/lib/host/factory/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/host/factory/agent-loop.js	2026-11-01 19:43:24.000000000 +0800
+@@ -180,8 +180,8 @@
+  * dsh-user-approval 的 hasOpenTurn 判定）。
+  */
+ function hasOpenTurn(session) {
+-    for (let index = session.events.length - 1; index >= 0; index -= 1) {
+-        const type = session.events[index]?.type;
++    for (let index = session.snapshotEvents().length - 1; index >= 0; index -= 1) {
++        const type = session.snapshotEvents()[index]?.type;
+         if (type === 'turn/start')
+             return true;
+         if (type === 'turn/end')
+@@ -589,9 +589,19 @@
+         // DSH's transient default is not authoritative for a fork. If the seed
+         // proves an ACP route, keep that route (and model) even when the caller
+         // supplied the currently selected global default from another backend.
+-        const provider = options.meta?.parentSession !== undefined && seedProvider?.startsWith('acp-') === true
++        let provider = options.meta?.parentSession !== undefined && seedProvider?.startsWith('acp-') === true
+             ? seedProvider
+             : options.agentOptions?.provider;
++        let hijacked = false;
++        // CCW fork: when no ACP provider is selected, fall back to the first
++        // configured ACP profile so every new session runs Claude Code.
++        if (provider === undefined || this.installedProfileRegistry.resolveRoute(provider) === undefined) {
++            const routes = [...this.installedProfileRegistry.agents().keys()].sort();
++            if (routes.length > 0) {
++                provider = routes[0];
++                hijacked = true;
++            }
++        }
+         if (provider === undefined)
+             return super.createAgent(ownerCtx, options);
+         const resolved = this.installedProfileRegistry.resolveRoute(provider);
+@@ -599,9 +609,11 @@
+             return super.createAgent(ownerCtx, options);
+         const agentOptions = {
+             ...(options.agentOptions ?? {}),
+-            ...(seedProvider === provider && seedHeader?.config.model === undefined ? {} : seedProvider === provider && seedHeader?.config.model !== undefined ? { model: seedHeader.config.model } : {}),
++            ...(!hijacked && seedProvider === provider && seedHeader?.config.model === undefined ? {} : !hijacked && seedProvider === provider && seedHeader?.config.model !== undefined ? { model: seedHeader.config.model } : {}),
+             provider,
+         };
++        if (hijacked)
++            delete agentOptions.model;
+         await this.acpRouteReady();
+         const forkResolution = await this.resolveForkCandidate(options, provider);
+         // 会话创建门：只有五态为 ready 的 profile 允许创建新 ACP 会话
+@@ -928,6 +940,17 @@
+             dshSessionId: String(id),
+             workspaceRoot: session.header.cwd ?? process.cwd(),
+             approval: getCtxSlot(loopCtx, 'approval'),
++            policy: () => {
++                const service = getCtxSlot(loopCtx, 'approval');
++                if (service === undefined)
++                    return undefined;
++                try {
++                    return service.overrideOf?.(session) ?? service.config?.policy;
++                }
++                catch {
++                    return undefined;
++                }
++            },
+             pending: this.acpPendingPermissions,
+             toolCallPresentation: (toolCallId) => agent.getToolCallPresentationSnapshot(toolCallId),
+             audit: acpAuditChannel(sidecar, id),
+diff -ruN a/lib/host-compat/agent-loop.js b/lib/host-compat/agent-loop.js
+--- a/lib/host-compat/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/host-compat/agent-loop.js	2026-11-01 19:32:57.000000000 +0800
+@@ -317,7 +317,7 @@
+             publish: (source) => {
+                 assertLive();
+                 detachSession = agent.ctx.sessions.enter(session);
+-                detachAgent = loopCtx.agents.enter(agent, ownerCtx.agent);
++                detachAgent = loopCtx.agents.enter(agent, undefined);
+                 agent.ctx.sessions.announce(session);
+                 assertLive();
+                 loopCtx.agents.announce(agent);
+diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
+--- a/lib/protocol/v1/translate.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/protocol/v1/translate.js	2026-11-01 19:40:58.000000000 +0800
+@@ -87,7 +87,7 @@
+  * 显式引入 @types/node（src/protocol/v1/connection.ts 同款先例），不改动共享 tsconfig。
+  */
+ /// <reference types="node" />
+-import { CallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm';
++import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm';
+ import { ACP_EXTERNAL_TOOL_NAME, ACP_TOOL_CONTENT_META_ITEMS_MAX, ACP_TOOL_CONTENT_TOTAL_MAX_CHARS, acpToolInputSummary, acpToolPresentationMetaJson, acpToolPresentationPreview, boundAcpToolPresentationItems, boundAcpToolTitle, } from "./tool-presentation.js";
+ import { countLines, hash16Of, headTailPreview, toolContentMetaJson, } from "./tool-content.js";
+ // Tool content 的界限常量已移居 ./tool-presentation.ts（落盘 text 块
+@@ -945,7 +945,7 @@
+      *   tool 卡片上方」，见 {@link PresentationSegmenter}），再发一个仅含
+      *   tool-call block 的标准 `assistant/message`（其人类可读 name 取 ACP title，
+      *   供 DSH 轨迹归属和标题展示）以及 one `tool/call`
+-     *   with `{callId: CallId(toolCallId),
++     *   with `{callId: ToolCallId(toolCallId),
+      *   name: ACP_EXTERNAL_TOOL_NAME, arguments: JSON.stringify(rawInput ?? {})}` ( * the unstable ACP `name` field is NOT consulted；：`name` 恒为稳定名
+      *   {@link ACP_EXTERNAL_TOOL_NAME}——宿主 keyed `tool.call.toolview` 槽位
+      *   按 wire tool name 分发，动态 title 无法稳定命中；首帧 wire title 有界
+@@ -1230,7 +1230,7 @@
+         const callTitle = boundAcpToolTitle(update.title) ?? acpUnknownToolName(update.toolCallId);
+         const assistantCall = {
+             type: 'tool-call',
+-            id: CallId(update.toolCallId),
++            id: ToolCallId(update.toolCallId),
+             // 轨迹使用 assistant block 的 name 展示；这里保留 ACP 的人类可读标题。
+             // 独立 tool/call 仍使用稳定 wire name，以命中插件的 keyed toolview。
+             name: callTitle,
+@@ -1249,12 +1249,13 @@
+                 content: [assistantCall],
+                 source: { provider: this.currentRoute.provider, model: this.effectiveModel() },
+             }),
+-        }, { surfaceOp: 'append', sourceEventSeqs: [callChunk.seq] }));
++            stream: [],
++        }, { surfaceOp: 'append' }));
+         const meta = acpToolCallMetaJson(update);
+         const data = {
+             turn: this.turnNumber,
+             step,
+-            callId: CallId(update.toolCallId),
++            callId: ToolCallId(update.toolCallId),
+             // name 恒为稳定名——宿主 keyed `tool.call.toolview` 槽位按 wire
+             // tool name 分发（ui-tool ToolCallTree 的 entryKey），动态 title 会让
+             // 渲染器永远无法稳定命中。首帧 wire title 随 meta.acpToolCall.title
+@@ -1390,7 +1391,7 @@
+         }
+         const isError = status === 'failed';
+         const message = createToolResultMessage({
+-            callId: CallId(update.toolCallId),
++            callId: ToolCallId(update.toolCallId),
+             content: mapped.blocks,
+             isError,
+         });
+@@ -1518,9 +1519,8 @@
+             step,
+             message,
+         };
+-        events.push(this.sink.append('assistant/message', data, {
++        events.push(this.sink.append('assistant/message', { ...data, stream: [] }, {
+             surfaceOp: 'append',
+-            sourceEventSeqs: this.chunkSeqs,
+         }));
+         this.segmenter.noteVisibleOutput();
+         this.blocks = [];
+diff -ruN a/lib/util/assert-never.js b/lib/util/assert-never.js
+--- a/lib/util/assert-never.js	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/util/assert-never.js	2026-11-01 18:15:12.000000000 +0800
+@@ -0,0 +1,4 @@
++/** Exhaustiveness guard for the adapter's closed unions. */
++export function assertNever(value, context = 'unexpected value') {
++  throw new Error(`${context}: ${String(value)}`)
++}
+diff -ruN a/package.json b/package.json
+--- a/package.json	1985-10-26 16:15:00.000000000 +0800
++++ b/package.json	2026-11-01 19:20:47.000000000 +0800
+@@ -48,19 +48,6 @@
+   "dsh": {
+     "bundle": {
+       "patch": "./cordis.patch.yml"
+-    },
+-    "client": {
+-      "inject": [
+-        "@deepseek-ai/dsh-api-remotes",
+-        "@deepseek-ai/dsh-client-connection",
+-        "@deepseek-ai/dsh-client-locale",
+-        "@deepseek-ai/dsh-client-runtime",
+-        "@deepseek-ai/dsh-client-ui-commands",
+-        "@deepseek-ai/dsh-client-ui-conversation",
+-        "@deepseek-ai/dsh-client-ui-tool",
+-        "@deepseek-ai/dsh-client-ui-settings"
+-      ],
+-      "platform": "web"
+     }
+   },
+   "scripts": {
+@@ -77,13 +64,13 @@
+     "prepack": "node scripts/prepack.mjs"
+   },
+   "dependencies": {
+-    "@agentclientprotocol/sdk": "1.3.0",
+-    "zod": "4.4.3"
++    "@agentclientprotocol/sdk": "^1.3.0",
++    "zod": "^4.4.3"
+   },
+   "peerDependencies": {
+     "@deepseek-ai/cordis": "4.0.1",
+-    "@deepseek-ai/dsh-attachment": ">=0.1.1-rc.2",
+     "@deepseek-ai/dsh-api-remotes": ">=0.1.1-rc.2",
++    "@deepseek-ai/dsh-attachment": ">=0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-connection": ">=0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-locale": ">=0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-runtime": ">=0.1.1-rc.2",
+@@ -95,11 +82,11 @@
+   },
+   "devDependencies": {
+     "@deepseek-ai/cordis": "4.0.1",
+-    "@deepseek-ai/dsh-attachment": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-agent": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-agent-loop": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-agent-presets": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-api-remotes": "0.1.1-rc.2",
++    "@deepseek-ai/dsh-attachment": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-connection": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-locale": "0.1.1-rc.2",
+     "@deepseek-ai/dsh-client-runtime": "0.1.1-rc.2",

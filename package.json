@@ -33,6 +33,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
+    "prepare:acp-adapter": "node scripts/prepare-acp-adapter.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "node --test test/unit/*.test.ts test/integration/*.test.ts",

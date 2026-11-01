@@ -10,7 +10,7 @@
 |---|---|---|
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
-| P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
+| P2 呈现层 | **P2a 完成；P2b 垂直切片 PASS** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 已跑通“发任务 → Claude 执行 → 原生工具卡/回复 → 文件写入”。待收入仓库并接入 CCW 工作区配置。 |
 | P3 远程 | **P3 完成** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读写、断线标记/过期/重连、`sessions/reconnect` 与控制台重连。localhost 与**第二台 Ubuntu VM 真实 Claude** 均 PASS。 |
 | P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
 | P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查；未做发布与 CI 矩阵。 |
@@ -128,16 +128,42 @@
 
 剩余：真实断网/杀进程（非进程崩溃）的 SSH 回归。
 
-## P2b Q8 spike（2026-11-01）
+## P2b 会话内联（2026-11-01）
 
-在隔离 web profile 中加载 `@zaimokuza/dsh-acp-adapter@0.1.0-rc.10`（DSH 0.2.1-rc.5）：
+### 路线
 
-- `--dump-config` 正确禁用 `agent-loop` / `ui-model-selection`，并插入 `agent-loop-acp`
-- 启动失败：`@deepseek-ai/dsh-llm` 不再导出 `CallId`
-- 把该符号改为 `ToolCallId` 后，下一处失败：`@deepseek-ai/dsh-agent` 不再导出 `Inbox`（0.2.x 改为 driver-owned `ReactLoopInbox`，且未从包入口导出）
-- 适配器的 `host-compat` 仍绑定 0.1.1-rc.2 的私有 `initializeAgent`/发布流程
+fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`），移除其 12.9k 行客户端，保留 **DSH 原生会话 UI**。适配器 host 继续把 ACP 更新翻译成 DSH Session 事件，因此原生消息流、工具卡、Trajectory 都能直接渲染。
 
-结论：**不能直接复用该适配器**。P2b 若要继续，需要 fork 并迁移 LLM 工厂、Inbox 实现与 host-compat；这是一次独立且较大的工作。本轮暂缓 P2b，优先完成 P4 的 composer 能力与 P5 硬化。
+### 已验证垂直切片（PASS）
+
+隔离 web profile（`dsh-base` + `dsh-web-app` + fork）中：
+
+- 原生模型选择器出现 `Claude Code · ACP`
+- 工作区新建会话 → Full access → 发送任务
+- 原生 UI 显示用户消息、thinking、工具卡（`dsh_acp_external_tool`）与 assistant 文本
+- turn `Completed in 7s`，Claude 实际写入 `cherry.txt`（内容 `hello-cherry`），文件存在于工作区
+- 无 console/page error
+
+### Host 侧迁移点（均已验证）
+
+1. `CallId` → `ToolCallId`（`@deepseek-ai/dsh-llm`，全局替换）
+2. `Inbox` 不再导出 → 本地 shim：按 `agent/inbox/spliced` 维护状态并 `session.append`
+3. `assertNever` 移出 `dsh-llm` → 本地 shim
+4. `session.events` 不再存在 → `session.snapshotEvents()`（resume/agent/inbox/host-compat）
+5. `ownerCtx.agent` 在 0.2.x 触发未注入属性保护 → 顶级会话传 `undefined`
+6. `assistant/message` 不能带 `sourceEventSeqs` → 去掉该 intent 并补 `stream: []`
+7. `settings.register` 移除 → `$DSH_HOME/dsh-acp/agents.json` 种子 profile
+8. `createAgent` 在无 ACP provider 时默认路由到首个 ACP profile（否则原生会话走 stub route 并报 `ACP_STUB_ROUTE`）
+9. Full access 下 DSH 审批策略为 `never`（原生工具不审批）→ ACP 权限桥在 `never` 下按 Native Agent Access 语义回 `allow-once`，否则 Claude 会收到拒绝
+10. 适配器 `dsh.client` 移除，保留原生 `ui-model-selection`；Native Agent Access 需在 UI 中二次确认
+
+### 尚需
+
+- 把 fork 收入仓库（`vendor/`）、补齐依赖安装与打包/许可证 NOTICE
+- 用 CCW 的工作区/主机配置替代 `agents.json` + 默认模型 hack
+- 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回
+- Session 恢复/重启、并发、跨机回归与测试
+- 适配器 sidecar/audit 与 CCW 审计的边界说明
 
 ## P4a composer（2026-11-01）
 
