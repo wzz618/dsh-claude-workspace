@@ -1,0 +1,18 @@
+# Bundle patch layer for dsh-claude-workspace.
+#
+# P1 inserts the Host plugin only. It exposes the workspace/runtime/permission
+# API over the host connection and deliberately leaves the stock agent loop and
+# model picker in place: P2 replaces those two rows, at which point this file
+# gains:
+#
+#   - id: agent-loop
+#     disabled: true
+#   - id: ui-model-selection
+#     disabled: true
+#
+# and a `ccw-client` browser row. Do not disable those rows before the agent
+# factory exists, or ordinary DSH sessions lose their loop.
+- insert:
+    - id: claude-workspace
+      name: dsh-claude-workspace
+      config: {}

@@ -1,0 +1,13 @@
+dsh-claude-workspace
+====================
+
+This package is an independent implementation of the workspace/runtime layer
+described in the CCW design note. Its DSH integration follows the packaging and
+slot conventions demonstrated by:
+
+  - @zaimokuza/dsh-acp-adapter (MIT License)
+  - dsh-memory-journal js-shell (MIT License)
+
+It speaks the Agent Client Protocol to @agentclientprotocol/claude-agent-acp,
+which is distributed separately under the Apache License 2.0 and is not bundled
+with this package.

@@ -1,0 +1,87 @@
+{
+  "name": "dsh-claude-workspace",
+  "version": "0.1.0",
+  "description": "Claude Code workspaces for DeepSeek Harness: local or SSH-hosted Claude Code sessions over ACP, with workspace-managed directories, Claude's own permission options, and audited approval decisions.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/**/*.d.ts",
+    "lib/host/**/*.js",
+    "lib/workspace/**/*.js",
+    "lib/acp/**/*.js",
+    "lib/gate/**/*.js",
+    "lib/util/**/*.js",
+    "lib/config.js",
+    "lib/service.js",
+    "lib/audit.js",
+    "lib/http.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-client.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "node --test test/unit/*.test.ts test/integration/*.test.ts",
+    "test:unit": "node --test test/unit/*.test.ts",
+    "test:integration": "node --test test/integration/*.test.ts",
+    "test:real": "node test/real/real-acp.ts"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "claude-code",
+    "acp",
+    "agent-client-protocol",
+    "workspace"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    },
+    "engines": {
+      "dsh": ">=0.2.1-rc.5"
+    },
+    "compatibility": {
+      "platforms": [
+        "linux"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}
