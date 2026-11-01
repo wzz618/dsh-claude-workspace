@@ -89,6 +89,8 @@
 
 未验证：真实浏览器内的点击/渲染（当前环境没有 headless browser）；客户端注册与纯函数由 `test/unit/client.test.ts` 覆盖。
 
+浏览器冒烟（2026-11-01，临时安装 Playwright + Chromium）：隔离 web profile 加载成功，`dsh-claude-workspace/client.js` 被请求，无 console/page error；页面显示 DSH 欢迎页和通过 API 登记的工作区。右侧栏 guide 为 session-scoped，隔离 profile 没有账号/模型，无法创建会话，因此**未能在浏览器里点击到 `Claude Code` tab 本身**；该 tab 的类型注册由客户端单测覆盖。临时浏览器、playwright 缓存与 DSH_HOME 已删除。
+
 剩余 P2b：接管 `agent-loop` / `ui-model-selection`。DSH 0.2.x 的 `AgentLoop` 通过 `private` 的 `initializeAgent`/发布流程创建 Agent，`@zaimokuza/dsh-acp-adapter` 用绑定 0.1.1-rc.2 的 host-compat 影子层绕开；这需要一次单独 spike，不能直接复用 P2a 的独立控制台。
 
 ## P3a 远程设置桥（2026-11-01）
