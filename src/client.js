@@ -1021,9 +1021,9 @@ window.__ModuleLoader__.load({
 
 				const stateLabel = runtime === 'busy' ? t('stateBusy') : runtime === 'disconnected' ? t('stateDisconnected') : runtime === 'ready' ? t('stateReady') : t('stateStopped')
 				const stateColor = runtime === 'busy' ? 'var(--dsw-alias-state-business-primary, #4b7bec)' : runtime === 'disconnected' ? 'var(--dsw-alias-state-error-primary, #d4380d)' : runtime === 'ready' ? 'var(--dsw-alias-state-success-primary, #237804)' : 'var(--dsw-alias-label-tertiary)'
-				const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceId)
-				const canCreateNative = Boolean(native && native.available
-					&& (selectedWorkspace === undefined || selectedWorkspace.host === undefined || selectedWorkspace.host.kind === 'local'))
+				// SSH workspaces are supported too; the Host reports a missing
+				// probeCwd as an actionable error when the button is used.
+				const canCreateNative = Boolean(native && native.available)
 				const groups = groupEvents(events)
 				const toolTree = collectToolCards(events)
 				const renderedTools = new Set()
