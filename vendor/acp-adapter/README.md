@@ -65,16 +65,34 @@ patch 包含：
 8. `createAgent` 仅在 provider 命中 `acp-*` 路由时接管；其余会话交给原生 loop（不做默认劫持）
 9. Full access（`never` 策略）下 ACP 权限回 `allow-once`
 10. 移除上游 `dsh.client`（客户端半区），保留原生 `ui-model-selection`
+11. **持久化**：`createAgent` 走 `sessionPersistence.create()` 领取写句柄并写入 seed；
+    `resumeAcpLifecycle` 改用 `open(id, 'write')` + `read(0)` + `interruptedTurnClosers()`，
+    不再调用 0.2 已移除的 `persistence.prepare()`；句柄随生命周期关闭
+12. **路由窥测**：`persistence.inspect()` 换为只读 `open(id, 'read')` + `read`，
+    `persistence.list()` 按 0.2 的 snapshot 结构读取 `header.id`
+13. **事件词表**：不再落 0.2 已不存在的 `assistant/chunk`；助手内容在段收口时
+    以单条 `assistant/message`（`stream: []`）提交
+
+## 原生入口与恢复
+
+CCW 的 `POST /sessions/native-create` 用 `native.provider`（默认
+`acp-claude-code`）创建 DSH 会话并挂到工作区，因此 DSH 侧的会话列表、重启恢复
+和会话流都按普通 DSH 会话处理。实测（2026-11-01）：
+
+1. 新建 → 首轮完成 → JSONL 落盘；
+2. 重启 DSH → 再次 prompt → 适配器 `session/resume` 恢复 ACP 上下文 → 第二轮正常完成。
+
+会话只在生命周期关闭或 checkpoint flush 时物化；进程被 SIGKILL 时未 flush 的
+尾部仍可能丢失（与原生 loop 相同）。
 
 ## 已知限制（P2b 待办）
 
-- 不是 CCW 工作区/主机模型：目前使用静态 `agents.json`。
-- 原生模型选择器在已有会话内切换 ACP 不会重建 Agent；opt-in 入口仍需完善
-  （CCW 右侧栏控制台是当前可靠的 Claude 入口）。
+- 不是 CCW 工作区/主机模型：原生会话使用 `agents.json` 的静态 profile，且只支持本地工作区。
+- 无 token 级流式显示：0.2 没有 `assistant/chunk`，助手文本在段结束时一次性出现。
 - 权限选项未保真：Full access 下自动 `allow-once`，`allow-with-updates`
   需接回 CCW 权限 Dock。
 - 上游 sidecar/audit 与 CCW 审计并存，需要划清边界。
-- 未覆盖恢复、并发、跨机与上游版本升级。
+- 未覆盖并发多会话、跨机与上游版本升级的真机回归。
 - 上游客户端半区已移除，ACP 设置页与专用模型选择器不可用。
 
 状态与验证记录见 [`docs/IMPLEMENTATION-STATUS.md`](../../docs/IMPLEMENTATION-STATUS.md) 的 P2b 一节。

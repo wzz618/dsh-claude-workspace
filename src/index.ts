@@ -56,9 +56,13 @@ export const Config = {
  */
 export function apply(ctx: CordisContext, config: CcwConfigInput = {}): void {
   const controller = readService<WorkspaceControllerLike>(ctx, 'workspaceController')
+  const services = typeof ctx.get === 'function'
+    ? { get: (serviceName: string) => ctx.get!(serviceName) }
+    : undefined
   const service = createService({
     config,
     ...(controller === undefined ? {} : { workspaceController: controller }),
+    ...(services === undefined ? {} : { services }),
   })
 
   // The workspace controller commonly loads after this row; attach when it

@@ -21,6 +21,7 @@
     "lib/workspace/**/*.js",
     "lib/acp/**/*.js",
     "lib/gate/**/*.js",
+    "lib/native/**/*.js",
     "lib/util/**/*.js",
     "lib/config.js",
     "lib/service.js",

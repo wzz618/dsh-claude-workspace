@@ -17,6 +17,7 @@ export const CCW_HTTP_PATHS = [
   '/api/dsh-claude-workspace/workspaces/files',
   '/api/dsh-claude-workspace/sessions',
   '/api/dsh-claude-workspace/sessions/open',
+  '/api/dsh-claude-workspace/sessions/native-create',
   '/api/dsh-claude-workspace/sessions/prompt',
   '/api/dsh-claude-workspace/sessions/cancel',
   '/api/dsh-claude-workspace/sessions/reconnect',
@@ -98,6 +99,12 @@ async function dispatch(
         strategy: service.config.workspaces.strategy,
         prefix: service.config.workspaces.prefix,
         registryAvailable: service.registryAvailable,
+        native: {
+          available: service.nativeAvailable,
+          provider: service.config.native.provider,
+          model: service.config.native.model,
+          permissionPreset: service.config.native.permissionPreset,
+        },
         approvalsTimeoutMs: service.config.approvals.timeoutMs,
         acp: {
           executable: service.config.acp.executable,
@@ -155,6 +162,8 @@ async function dispatch(
         ...optionalOption(body, 'effort'),
         ...optionalOption(body, 'mode'),
       })
+    case 'POST /api/dsh-claude-workspace/sessions/native-create':
+      return service.createNativeSession(requiredString(body, 'workspaceId'))
     case 'POST /api/dsh-claude-workspace/sessions/prompt': {
       const images = parseImages(body?.images)
       return service.prompt({

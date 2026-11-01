@@ -10,7 +10,7 @@
 |---|---|---|
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
-| P2 呈现层 | **P2a 完成；P2b 垂直切片 PASS** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 已跑通“发任务 → Claude 执行 → 原生工具卡/回复 → 文件写入”。待收入仓库并接入 CCW 工作区配置。 |
+| P2 呈现层 | **P2a 完成；P2b 可用（原生入口 + 重启恢复）** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 跑通；新增一键「新建 Claude 会话」入口，并补齐 0.2.1 持久化/恢复 API 迁移。 |
 | P3 远程 | **P3 完成** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读写、断线标记/过期/重连、`sessions/reconnect` 与控制台重连。localhost 与**第二台 Ubuntu VM 真实 Claude** 均 PASS。 |
 | P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
 | P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查；未做发布与 CI 矩阵。 |
@@ -163,16 +163,44 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
   `~/.dsh/.credentials.yaml` 中 `refs.OPENCODE_GO_API_KEY` 保存的 token
 - Claude：只有显式选择 `Claude Code · ACP` 的会话才由 fork 接管；原生模型选择器
   在会话已创建后再切换不会重建 Agent，因此新建会话时就要选 ACP（或临时改默认）
-- CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口
+- **可靠的 opt-in 入口**：右侧栏 `Claude Code` 控制台新增 **新建 Claude 会话**
+  （`POST /sessions/native-create`）。服务端用 `native.provider` 调
+  `ctx.agents.create()`，挂到 DSH 工作区，写入 `native.permissionPreset`，
+  返回 sessionId；客户端用 `uiWorkspace.openSession()` 直接打开原生会话。
+  配置见 `native.provider/model/permissionPreset/attachToWorkspace`。
+- CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口（也是 SSH 工作区唯一入口）
+
+### 原生入口真机验证（2026-11-01）
+
+隔离外的真实 web profile（源码启动，`opencode-go` 默认不变）：
+
+1. `POST /workspaces/create` 注册 `/tmp/ccw-native-demo`，得到 `dshWorkspaceId`
+2. `POST /sessions/native-create` → 24 ms 返回 `session-…`，`workspaceAttached:true`、
+   `permissionPreset:"danger-full-access"`
+3. 用 DSH 自己的 `session/prompt` RPC 发任务 → 1 个 turn 完成，助手回复由 Claude 生成
+4. JSONL 会话物化，ACP sidecar 记录 `acp-claude-code` binding（claude-agent-acp 0.99.1）
+5. 重启 DSH → 同一 sessionId 再次 prompt → `request/header reason:"resume"`、
+   ACP `session/resume` 恢复上下文、第二轮回复正确
+
+### 迁移修复（真机重启暴露）
+
+1. **持久化缺失**：fork 的 `createAgent` 没有领取 `sessionPersistence.create()` 写句柄，
+   会话从不落盘，重启后 `session/not-found`。已按 0.2.1 生命周期补上 handle、
+   seed 写入与 dispose 关闭。
+2. **恢复 API 漂移**：`resumeAcpLifecycle` 仍调用 0.1 的 `persistence.prepare()`；
+   改为 `open(id,'write')` + `read(0)` + `interruptedTurnClosers()`（0.2 事件形态的本地副本），
+   再把 seed 交给 `sessions.prepare()`。
+3. **`persistence.inspect()` 已不存在**：路由窥测改为只读 `open(id,'read')`；`list()`
+   按 snapshot 的 `header.id` 匹配。
+4. **`assistant/chunk` 已不在 0.2 词表**：翻译器不再 append 该事件，否则日志会被
+   session query 拒绝（`contains event type "assistant/chunk" unknown`）。
 
 ### 尚需
 
-- 做可靠的“新建 Claude 会话”opt-in 入口（当前原生 picker 有时序限制）
-- 把 fork 收入仓库（`vendor/`）、补齐依赖安装与打包/许可证 NOTICE
-- 用 CCW 的工作区/主机配置替代 `agents.json` + 默认模型 hack
+- 用 CCW 的工作区/主机配置替代 `agents.json`（当前原生入口只支持本地工作区）
 - 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回
-- Session 恢复/重启、并发、跨机回归与测试
-- 适配器 sidecar/audit 与 CCW 审计的边界说明
+- 并发多会话/跨机原生回归；适配器 sidecar/audit 与 CCW 审计的边界说明
+- token 级流式显示（0.2 无 `assistant/chunk`，助手文本段末一次性出现）
 
 ## P4a composer（2026-11-01）
 

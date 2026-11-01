@@ -2,7 +2,18 @@
 
 给 DeepSeek Harness 用的「Claude Code 工作区」插件：按 DSH 工作区管理本地或 SSH 主机上的 Claude Code 会话，通过 ACP（Agent Client Protocol）保留 Claude 自己的工具、权限选项、diff、计划与模式，并把每次权限决定写入审计。
 
-本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）+ P3 远程设置桥**。P2b 的 agent-loop 接管、跨物理机/重连验证，以及 P4–P5（子 agent、发布硬化等）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
+本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）+ P2b（DSH 原生会话内联）+ P3（远程设置桥）**。P4–P5 的部分细节（子 agent 会话树、发布硬化）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
+
+## 两种 Claude 入口
+
+| 入口 | 走哪里 | 适合 |
+|---|---|---|
+| 右侧栏 `Claude Code` 控制台 | 本插件自己的 ACP 客户端（`CcwService`），本地或 SSH | 远程主机、权限 Dock、放宽规则、审计 |
+| 原生会话（`新建 Claude 会话`） | `@zaimokuza/dsh-acp-adapter` fork，DSH 自己的会话 UI | 本地、原生消息流/工具卡/Trajectory、与普通 DSH 会话并列 |
+
+原生入口在 Web UI 右侧栏 `Claude Code` 标签里，选中工作区后点 **新建 Claude 会话**：插件会用 `acp-claude-code` provider 创建一个 DSH 会话、挂到该工作区、写入配置的权限预设（默认 Full access，Claude 自己继续负责权限问答），然后直接用 `uiWorkspace.openSession()` 打开。DSH 默认模型仍然是 `opencode-go`；只有这个入口（或手动选择 `Claude Code · ACP`）才走 Claude。
+
+原生入口目前只支持本地工作区：ACP 子进程由适配器在本机 spawn，SSH 工作区请使用控制台。
 
 ## 它做什么
 
@@ -31,7 +42,24 @@ command -v claude-agent-acp
 dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-workspace
 ```
 
-`cordis.patch.yml` 只插入本插件一行，**不会**禁用 `agent-loop` / `ui-model-selection`；P1 不接管 DSH 的普通会话，因此装上也只会多出设置页与本地 API。
+`cordis.patch.yml` 只插入本插件一行，**不会**禁用 `agent-loop` / `ui-model-selection`；普通 DSH 会话继续使用自己的 loop。
+
+### 原生会话入口（可选）
+
+原生入口依赖 fork 后的 ACP 适配器；仓库只提交可复现的迁移 patch，不提交上游源码：
+
+```sh
+node scripts/prepare-acp-adapter.mjs /opt/dsh-acp-adapter
+
+mkdir -p ~/.dsh/dsh-acp
+cat > ~/.dsh/dsh-acp/agents.json <<'JSON'
+{"agents":{"claude-code":{"name":"Claude Code","command":"/absolute/path/to/claude-agent-acp","args":[],"env":{}}}}
+JSON
+
+dsh plugin --profile web add /opt/dsh-acp-adapter
+```
+
+安装后重启 DSH，右侧栏控制台选中本地工作区时会出现 **新建 Claude 会话**。没有安装适配器时该按钮会把创建失败的原因显示在控制台里。
 
 ### 配置示例
 
@@ -87,6 +115,11 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
           serverAliveIntervalSec: 15
           serverAliveCountMax: 3
           strictHostKeyChecking: true
+        native:                       # 原生会话入口（P2b）
+          provider: acp-claude-code   # 适配器注册的 provider 路由
+          model: default              # ACP 模型的默认项
+          permissionPreset: danger-full-access
+          attachToWorkspace: true     # 挂到对应 DSH 工作区，侧栏可见
 ```
 
 配置是严格的：未知字段、越界数值、非绝对路径、未声明的 `defaultHost`、`forwardClaudeOptions: false` 都会在加载时报错并列出全部问题。

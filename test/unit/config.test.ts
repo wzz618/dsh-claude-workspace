@@ -15,6 +15,24 @@ test('defaults resolve to a local host and a data directory under DSH_HOME', () 
   assert.equal(config.approvals.timeoutMs, 0)
   assert.equal(config.acp.executable, 'claude-agent-acp')
   assert.equal(config.permissions.forwardClaudeOptions, true)
+  assert.deepEqual(config.native, {
+    provider: 'acp-claude-code',
+    model: 'default',
+    permissionPreset: 'danger-full-access',
+    attachToWorkspace: true,
+  })
+})
+
+test('native entry configuration is validated', () => {
+  const config = resolveConfig({ native: { provider: 'acp-other', model: 'sonnet', permissionPreset: 'workspace-write', attachToWorkspace: false } })
+  assert.deepEqual(config.native, {
+    provider: 'acp-other',
+    model: 'sonnet',
+    permissionPreset: 'workspace-write',
+    attachToWorkspace: false,
+  })
+  assert.throws(() => resolveConfig({ native: { bogus: true } as never }), /native.bogus/)
+  assert.throws(() => resolveConfig({ native: { attachToWorkspace: 'yes' as never } }), /native.attachToWorkspace/)
 })
 
 test('unknown keys are rejected together with other invalid fields', () => {

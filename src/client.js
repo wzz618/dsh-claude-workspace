@@ -117,6 +117,9 @@ window.__ModuleLoader__.load({
 			sessionsLabel: '个会话',
 			modeLabel: '模式',
 			toolLabel: '工具',
+			nativeSession: '新建 Claude 会话',
+			nativeOpened: '已在新会话中打开 Claude',
+			nativeCreated: '会话已创建',
 		}
 
 		const en = {
@@ -205,6 +208,9 @@ window.__ModuleLoader__.load({
 			sessionsLabel: 'sessions',
 			modeLabel: 'mode',
 			toolLabel: 'tool',
+			nativeSession: 'New Claude session',
+			nativeOpened: 'Opened Claude in a new session',
+			nativeCreated: 'Session created',
 		}
 
 		const styles = {
@@ -621,11 +627,12 @@ window.__ModuleLoader__.load({
 
 		// ── session console ─────────────────────────────────────────────────
 
-		function createConsole(t) {
+		function createConsole(t, ctx) {
 			return function Console() {
 				const [workspaces, setWorkspaces] = useState([])
 				const [bindings, setBindings] = useState([])
 				const [workspaceId, setWorkspaceId] = useState('')
+				const [native, setNative] = useState(null)
 				const [sessionId, setSessionId] = useState('')
 				const [opened, setOpened] = useState(false)
 				const [events, setEvents] = useState([])
@@ -650,12 +657,13 @@ window.__ModuleLoader__.load({
 
 				const refreshCatalog = useCallback(async () => {
 					try {
-						const [nextWorkspaces, nextBindings] = await Promise.all([
-							call('/workspaces'), call('/sessions'),
+						const [nextWorkspaces, nextBindings, status] = await Promise.all([
+							call('/workspaces'), call('/sessions'), call('/status'),
 						])
 						const active = (nextWorkspaces.workspaces || []).filter((workspace) => workspace.state === 'active')
 						setWorkspaces(active)
 						setBindings(nextBindings.sessions || [])
+						setNative(status.native || null)
 						setWorkspaceId((current) => current || (active[0] ? active[0].id : ''))
 						setError('')
 					} catch (failure) {
@@ -731,6 +739,23 @@ window.__ModuleLoader__.load({
 						? { modes: result.modes, configOptions: result.configOptions }
 						: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
 					setOptions(shape || null)
+					await refreshCatalog()
+				})
+
+				const createNativeSession = () => run(async () => {
+					const result = await post('/sessions/native-create', { workspaceId })
+					const ui = typeof ctx.get === 'function' ? ctx.get('uiWorkspace') : undefined
+					const warnings = Array.isArray(result.warnings) ? result.warnings : []
+					if (ui && typeof ui.openSession === 'function') {
+						ui.openSession(result.sessionId)
+						setNotice(warnings.length > 0
+							? `${t('nativeOpened')}: ${warnings.join('; ')}`
+							: t('nativeOpened'))
+					} else {
+						setNotice(warnings.length > 0
+							? `${t('nativeCreated')} ${result.sessionId}: ${warnings.join('; ')}`
+							: `${t('nativeCreated')}: ${result.sessionId}`)
+					}
 					await refreshCatalog()
 				})
 
@@ -1065,6 +1090,14 @@ window.__ModuleLoader__.load({
 								onClick: () => void openSession(),
 								children: t('openSession'),
 							}),
+							native && native.available
+								? h('button', {
+									style: styles.button,
+									disabled: busy || !workspaceId,
+									onClick: () => void createNativeSession(),
+									children: t('nativeSession'),
+								})
+								: null,
 						] }),
 						optionNodes.length > 0 ? h('div', { style: styles.panelRow, children: optionNodes }) : null,
 						pending.length > 0 ? h('div', { style: styles.panelRow, children: [
@@ -1220,7 +1253,7 @@ window.__ModuleLoader__.load({
 				inject: () => ({ t }),
 			}, SettingsSection))
 
-			const Console = createConsole(t)
+			const Console = createConsole(t, ctx)
 			const ConsoleTitle = createConsoleTitle(t)
 			const registerPanel = (scope, tabs) => {
 				scope.effect(() => tabs.register({

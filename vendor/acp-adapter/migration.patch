@@ -1,6 +1,6 @@
 diff -ruN a/cordis.patch.yml b/cordis.patch.yml
 --- a/cordis.patch.yml	1985-10-26 16:15:00.000000000 +0800
-+++ b/cordis.patch.yml	2026-11-01 19:20:59.000000000 +0800
++++ b/cordis.patch.yml	2026-11-01 20:11:23.838774129 +0800
 @@ -34,5 +34,3 @@
  # Row ②: the enhanced ACP model picker replaces the built-in
  # model-selection UI row (dsh-web-app cordis.patch.yml:249-251, no config of
@@ -9,7 +9,7 @@ diff -ruN a/cordis.patch.yml b/cordis.patch.yml
 -  disabled: true
 diff -ruN a/lib/client.js b/lib/client.js
 --- a/lib/client.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/client.js	2026-11-01 18:21:52.000000000 +0800
++++ b/lib/client.js	2026-11-01 20:11:23.838774129 +0800
 @@ -12662,7 +12662,6 @@
  			"locale",
  			"connection",
@@ -61,7 +61,7 @@ diff -ruN a/lib/client.js b/lib/client.js
  		return module.exports;
 diff -ruN a/lib/domain/policy/permissions.js b/lib/domain/policy/permissions.js
 --- a/lib/domain/policy/permissions.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/domain/policy/permissions.js	2026-11-01 19:43:24.000000000 +0800
++++ b/lib/domain/policy/permissions.js	2026-11-01 20:11:23.839774152 +0800
 @@ -59,7 +59,7 @@
   */
  import { randomUUID } from 'node:crypto';
@@ -95,7 +95,7 @@ diff -ruN a/lib/domain/policy/permissions.js b/lib/domain/policy/permissions.js
                  });
 diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
 --- a/lib/domain/session/agent.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/domain/session/agent.js	2026-11-01 19:32:09.000000000 +0800
++++ b/lib/domain/session/agent.js	2026-11-01 20:11:23.839774152 +0800
 @@ -20,8 +20,10 @@
  /// <reference types="node" />
  import { realpathSync } from 'node:fs';
@@ -156,7 +156,7 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
                          ? { status: 'overflow', detail: `session/load replay exceeded the staging limit (>${String(ACP_REPLAY_STAGING_MAX_ENTRIES)} entries or >${String(ACP_REPLAY_STAGING_MAX_CHARS)} chars)` }
 diff -ruN a/lib/domain/session/inbox.js b/lib/domain/session/inbox.js
 --- a/lib/domain/session/inbox.js	1970-01-01 08:00:00.000000000 +0800
-+++ b/lib/domain/session/inbox.js	2026-11-01 19:32:09.000000000 +0800
++++ b/lib/domain/session/inbox.js	2026-11-01 20:11:23.839774152 +0800
 @@ -0,0 +1,111 @@
 +/**
 + * DSH 0.2.x-compatible Inbox shim for the forked ACP adapter.
@@ -271,7 +271,7 @@ diff -ruN a/lib/domain/session/inbox.js b/lib/domain/session/inbox.js
 +}
 diff -ruN a/lib/domain/session/resume.js b/lib/domain/session/resume.js
 --- a/lib/domain/session/resume.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/domain/session/resume.js	2026-11-01 19:32:09.000000000 +0800
++++ b/lib/domain/session/resume.js	2026-11-01 20:11:23.839774152 +0800
 @@ -122,7 +122,7 @@
   * @returns 被中断的 turn 号；无中断尾巴 → `undefined`。
   */
@@ -301,7 +301,7 @@ diff -ruN a/lib/domain/session/resume.js b/lib/domain/session/resume.js
  }
 diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/composition/installed-profile-registry.js
 --- a/lib/host/composition/installed-profile-registry.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/host/composition/installed-profile-registry.js	2026-11-01 18:17:29.000000000 +0800
++++ b/lib/host/composition/installed-profile-registry.js	2026-11-01 20:11:23.839774152 +0800
 @@ -31,6 +31,7 @@
  /// <reference types="node" />
  import fs from 'node:fs';
@@ -356,7 +356,7 @@ diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/compos
          adapter,
 diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
 --- a/lib/host/factory/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/host/factory/agent-loop.js	2026-11-01 20:11:03.000000000 +0800
++++ b/lib/host/factory/agent-loop.js	2026-11-01 21:08:06.382613086 +0800
 @@ -180,8 +180,8 @@
   * dsh-user-approval 的 hasOpenTurn 判定）。
   */
@@ -368,7 +368,112 @@ diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
          if (type === 'turn/start')
              return true;
          if (type === 'turn/end')
-@@ -928,6 +928,17 @@
+@@ -197,6 +197,21 @@
+ function acpAuditChannel(sidecar, id) {
+     return { append: (record) => sidecar.append(id, record) };
+ }
++/**
++ * Read one stored session's log through a read handle. DSH 0.2 replaced the
++ * 0.1 `inspect()` snapshot with handle-based reads, which also work while
++ * another process holds the write claim.
++ */
++async function readStoredSession(persistence, id, signal) {
++    const options = signal === undefined ? undefined : { signal };
++    const handle = await persistence.open(id, 'read', options);
++    try {
++        return await handle.read(0, undefined, options);
++    }
++    finally {
++        await handle.close().catch(() => undefined);
++    }
++}
+ /** Concrete agent factory with ACP routing; replaces `agent-loop` under the bundle patch. */
+ export default class AcpAgentLoop extends AgentLoop {
+     /**
+@@ -377,7 +392,7 @@
+                     if (persistence === undefined) {
+                         throw new Error('session persistence is not configured (load a dsh-session-persistence backend)');
+                     }
+-                    const inspected = await persistence.inspect(sessionId);
++                    const inspected = await readStoredSession(persistence, sessionId, undefined);
+                     return foldRequestHeader(inspected.events)?.config.provider;
+                 },
+                 hasLiveAgent: (sessionId) => this.acpRuntime.ctx.agents.get(sessionId) !== undefined,
+@@ -610,11 +625,47 @@
+             ...options.seed === undefined ? {} : { seed: options.seed },
+             ...options.meta === undefined ? {} : { meta: options.meta },
+         }));
+-        const published = setupAndPublishAcpLifecycle(this.acpInternals, ownerCtx, options.sessionId, preparation, agentOptions, options.setup, options.signal, 'startup', (loopCtx, session) => this.createAcpMachine(loopCtx, options.sessionId, agentOptions, session, resolved, undefined, undefined, undefined, forkResolution.candidate, forkResolution.fallbackReason));
++        let stored;
++        let published;
++        try {
++            stored = await this.createStoredAcpSession(preparation.session, options.signal);
++            published = setupAndPublishAcpLifecycle(this.acpInternals, ownerCtx, options.sessionId, preparation, agentOptions, options.setup, options.signal, 'startup', (loopCtx, session) => this.createAcpMachine(loopCtx, options.sessionId, agentOptions, session, resolved, undefined, undefined, undefined, forkResolution.candidate, forkResolution.fallbackReason), stored);
++        }
++        catch (error) {
++            // A lifecycle that never reached prepare() has no dispose path for the
++            // handle yet; close it here so a failed creation leaves no writer claim.
++            if (stored !== undefined)
++                await stored.handle.close().catch(() => undefined);
++            throw error;
++        }
+         this.acpOwnership.trackWrapper(published);
+         return published;
+     }
+     /**
++     * Claim this session's durable write handle, then store any seed events.
++     * DSH 0.2 routes announced events into the adopted write handle by session id;
++     * the ACP lifecycle owns the handle and closes it during disposal.
++     */
++    async createStoredAcpSession(session, signal) {
++        const persistence = getResumePersistence(this.acpRuntime.ctx);
++        if (persistence === undefined)
++            return undefined;
++        const handle = await persistence.create(session.header, {
++            inheritedEventCount: session.inheritedEventCount,
++            ...signal === undefined ? {} : { signal },
++        });
++        try {
++            const seed = session.snapshotEvents();
++            if (seed.length > 0)
++                await handle.append(seed, signal === undefined ? undefined : { signal });
++            return { handle, storedCount: seed.length };
++        }
++        catch (error) {
++            await handle.close().catch(() => undefined);
++            throw error;
++        }
++    }
++    /**
+      * Resume an owned agent, routing sessions whose provider hits the ACP
+      * registry to {@link AcpAgent}. Provider resolution is marker-first（sidecar
+      * binding → persisted `request/header` → transient resume options）。与持久 provider
+@@ -736,8 +787,9 @@
+             return { binding };
+         }
+         try {
+-            const headers = await listCall.call(persistence);
+-            if (!headers.some((header) => header.id === conflict.dshSessionId))
++            // DSH 0.2 lists lightweight snapshots; the stored header carries the id.
++            const snapshots = await listCall.call(persistence);
++            if (!snapshots.some((snapshot) => snapshot.header.id === conflict.dshSessionId))
+                 return { binding };
+         }
+         catch (error) {
+@@ -761,9 +813,10 @@
+     async peekStoredRoute(persistence, id, signal) {
+         let route;
+         try {
++            const read = () => readStoredSession(persistence, id, signal);
+             const inspected = signal === undefined
+-                ? await persistence.inspect(id)
+-                : await raceAbort(persistence.inspect(id, signal), signal, id);
++                ? await read()
++                : await raceAbort(read(), signal, id);
+             const header = foldRequestHeader(inspected.events);
+             route = {
+                 ...header?.config.provider === undefined ? {} : { provider: header.config.provider },
+@@ -928,6 +981,17 @@
              dshSessionId: String(id),
              workspaceRoot: session.header.cwd ?? process.cwd(),
              approval: getCtxSlot(loopCtx, 'approval'),
@@ -388,8 +493,140 @@ diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
              audit: acpAuditChannel(sidecar, id),
 diff -ruN a/lib/host-compat/agent-loop.js b/lib/host-compat/agent-loop.js
 --- a/lib/host-compat/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/host-compat/agent-loop.js	2026-11-01 19:32:57.000000000 +0800
-@@ -317,7 +317,7 @@
++++ b/lib/host-compat/agent-loop.js	2026-11-01 21:08:41.681411401 +0800
+@@ -32,7 +32,109 @@
+ import { clearTimeout, setTimeout } from 'node:timers';
+ import process from 'node:process';
+ import { emitAgentEvent } from '@deepseek-ai/dsh-agent';
++import { SessionPreparation } from '@deepseek-ai/dsh-session';
+ import { FIBER_DISPOSED, FIBER_FAILED, FIBER_UNLOADING } from "./fiber-state.js";
++/** Recovery code for an assistant tool request that never reached a recorded call start. */
++const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
++/** Recovery code for a recorded tool call whose completed outcome was not durably recorded. */
++const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN';
++/**
++ * DSH 0.2 crash-recovery closers (copy of `@deepseek-ai/dsh-session`'s
++ * `interruptedTurnClosers`). The copy is required because this package pins
++ * dsh-session 0.1.1, whose tool-result event shape differs; the host validates
++ * events with the 0.2 vocabulary, so only this exact shape is appendable.
++ * @param events - committed log prefix, possibly ending inside an open turn.
++ * @returns synthetic tool/result, step/end, and turn/end events, in order.
++ */
++function interruptedTurnClosers(events) {
++    let openTurn = null;
++    let openStep = null;
++    const pending = new Map();
++    for (const event of events) {
++        switch (event.type) {
++            case 'turn/start':
++                openTurn = event.data.turn;
++                openStep = null;
++                pending.clear();
++                break;
++            case 'turn/end':
++                openTurn = null;
++                openStep = null;
++                pending.clear();
++                break;
++            case 'step/start':
++                openStep = event.data.step;
++                break;
++            case 'step/end':
++                pending.clear();
++                openStep = null;
++                break;
++            case 'assistant/message':
++                for (const block of event.data.message.content) {
++                    if (block.type === 'tool-call')
++                        pending.set(block.id, { turn: event.data.turn, step: event.data.step });
++                }
++                break;
++            case 'tool/call': {
++                const entry = pending.get(event.data.callId);
++                if (entry !== undefined)
++                    entry.callSeq = event.seq;
++                break;
++            }
++            case 'tool/result': {
++                const callId = event.data.message.source.callId;
++                const entry = pending.get(callId);
++                if (event.surfaceOp === 'append' && entry !== undefined
++                    && entry.turn === event.data.turn && entry.step === event.data.step)
++                    pending.delete(callId);
++                break;
++            }
++            default:
++                break;
++        }
++    }
++    const last = events.at(-1);
++    if (openTurn === null || last === undefined)
++        return [];
++    const closers = [];
++    let seq = last.seq + 1;
++    const time = last.time;
++    for (const [callId, entry] of pending) {
++        const started = entry.callSeq !== undefined;
++        closers.push({
++            type: 'tool/result',
++            seq: seq++,
++            time,
++            data: {
++                turn: entry.turn,
++                step: entry.step,
++                message: {
++                    id: `interrupted-tool-result-${callId}-${seq - 1}`,
++                    role: 'tool',
++                    toolCallId: callId,
++                    isError: true,
++                    source: { kind: 'tool', callId },
++                    content: [{
++                        type: 'text',
++                        text: started
++                            ? 'The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown. Decide whether to retry from the tool semantics: retry only if the operation is read-only or idempotent; if it may have side effects, first verify external state or ask the user. Do not retry blindly.'
++                            : 'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.',
++                    }],
++                },
++                error: started
++                    ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
++                    : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
++            },
++            surfaceOp: 'append',
++            ...started ? { sourceEventSeqs: [entry.callSeq] } : {},
++        });
++    }
++    if (openStep !== null) {
++        closers.push({ type: 'step/end', seq: seq++, time, data: { turn: openTurn, step: openStep } });
++    }
++    closers.push({ type: 'turn/end', seq: seq++, time, data: { turn: openTurn, reason: { kind: 'interrupted' } } });
++    return closers;
++}
+ /**
+  * 隔离项 1：FactoryOwnership（上游 :40-90，模块级未导出 class）。
+  * 签名摘要：`new (fiber: Context['fiber'])`；`signal: AbortSignal`；
+@@ -214,7 +316,7 @@
+  * 拆卸绝不因此被吊死。岛自给自足（架构守卫禁止 hostCompat import runtime），
+  * 限时竞速自含实现，不复用 runtime/process/timeout.ts。
+  */
+-export function prepareAcpLifecycle(internals, ownerCtx, id, options, session, callerSignal, createMachine, disposeIdleGate) {
++export function prepareAcpLifecycle(internals, ownerCtx, id, options, session, callerSignal, createMachine, disposeIdleGate, stored) {
+     assertAgentOptions(options);
+     ownerCtx.fiber.assertActive();
+     // Every caller reaches prepareAcpLifecycle synchronously from a service method
+@@ -277,6 +379,12 @@
+                 untrack();
+                 if (!ownerTriggered)
+                     await unfollowOwner();
++                // Close the write handle after the session leaves the registries
++                // so its final routed events drain before ownership is released.
++                if (stored !== undefined)
++                    await stored.handle.close().catch((error) => {
++                        internals.loopCtx.logger?.warn(`dsh-acp: final drain for session "${id}" failed: ${String(error)}`);
++                    });
+             }
+         }
+     })());
+@@ -317,7 +425,7 @@
              publish: (source) => {
                  assertLive();
                  detachSession = agent.ctx.sessions.enter(session);
@@ -398,9 +635,71 @@ diff -ruN a/lib/host-compat/agent-loop.js b/lib/host-compat/agent-loop.js
                  agent.ctx.sessions.announce(session);
                  assertLive();
                  loopCtx.agents.announce(agent);
+@@ -347,10 +455,10 @@
+  * 有意差异：上游 `using ownedPreparation = preparation` 改为 finally 里的
+  * {@link disposePreparation}（隔离项 10，lib ES2024 无 esnext.disposable）。
+  */
+-export async function setupAndPublishAcpLifecycle(internals, ownerCtx, id, preparation, agentOptions, setup, signal, source, createMachine) {
++export async function setupAndPublishAcpLifecycle(internals, ownerCtx, id, preparation, agentOptions, setup, signal, source, createMachine, stored) {
+     try {
+         const session = preparation.session;
+-        const prepared = prepareAcpLifecycle(internals, ownerCtx, id, agentOptions, session, signal, createMachine);
++        const prepared = prepareAcpLifecycle(internals, ownerCtx, id, agentOptions, session, signal, createMachine, undefined, stored);
+         try {
+             const setupCommit = await raceAbort(setup?.(prepared.agent.ctx), prepared.signal, id);
+             setupCommit?.commit();
+@@ -390,10 +498,32 @@
+             ownerAbort.signal,
+             internals.ownership.signal,
+         ]);
++        let handle;
+         let preparation;
++        let stored;
+         try {
+             try {
+-                preparation = await raceAbortCall(() => persistence.prepare(id, fused), fused, id, (abandoned) => { disposePreparation(abandoned); });
++                // Taking write ownership first excludes a concurrent resume of the
++                // same id; a live agent's handle already holds the claim.
++                handle = await raceAbortCall(() => persistence.open(id, 'write', { signal: fused }), fused, id, (abandoned) => { void abandoned.close(); });
++                // Crash repair: persistence returns the physically valid log; an
++                // interrupted final turn receives synthetic closers appended
++                // through the same handle as an ordinary batch.
++                const coldRead = await handle.read(0, undefined, { signal: fused });
++                fused.throwIfAborted();
++                const persisted = coldRead.events;
++                const closers = interruptedTurnClosers(persisted);
++                if (closers.length > 0)
++                    await handle.append(closers, { signal: fused });
++                preparation = SessionPreparation.create(internals.loopCtx.sessions.prepare(id, {
++                    seed: [...persisted, ...closers],
++                    meta: structuredClone(handle.header),
++                    inheritedEventCount: handle.inheritedEventCount,
++                    eventState: coldRead.eventState,
++                }));
++                stored = { handle, storedCount: persisted.length + closers.length };
++                // The lifecycle owns the write handle from here on.
++                handle = undefined;
+             }
+             finally {
+                 await unfollowOwner();
+@@ -401,11 +531,13 @@
+             ownerCtx.fiber.assertActive();
+             if (!internals.ownership.isActive())
+                 throw new Error('agent loop is not active');
+-            return await setupAndPublishAcpLifecycle(internals, ownerCtx, id, preparation, agentOptions, options.setup, options.signal, 'resume', createMachine);
++            return await setupAndPublishAcpLifecycle(internals, ownerCtx, id, preparation, agentOptions, options.setup, options.signal, 'resume', createMachine, stored);
+         }
+         finally {
+             if (preparation !== undefined)
+                 disposePreparation(preparation);
++            if (handle !== undefined)
++                await handle.close().catch(() => undefined);
+         }
+     })();
+     internals.ownership.trackWrapper(published);
 diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
 --- a/lib/protocol/v1/translate.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/protocol/v1/translate.js	2026-11-01 19:40:58.000000000 +0800
++++ b/lib/protocol/v1/translate.js	2026-11-01 21:12:33.943721987 +0800
 @@ -87,7 +87,7 @@
   * 显式引入 @types/node（src/protocol/v1/connection.ts 同款先例），不改动共享 tsconfig。
   */
@@ -419,7 +718,33 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
       *   name: ACP_EXTERNAL_TOOL_NAME, arguments: JSON.stringify(rawInput ?? {})}` ( * the unstable ACP `name` field is NOT consulted；：`name` 恒为稳定名
       *   {@link ACP_EXTERNAL_TOOL_NAME}——宿主 keyed `tool.call.toolview` 槽位
       *   按 wire tool name 分发，动态 title 无法稳定命中；首帧 wire title 有界
-@@ -1230,7 +1230,7 @@
+@@ -1100,17 +1100,21 @@
+     noteDegradation(entry) {
+         this.degradation?.(entry);
+     }
+-    /** Append one `assistant/chunk` (log-only; no surface metadata) and collect its seq. */
++    /**
++     * Validate that an assistant segment is open. DSH 0.2 logs one assembled
++     * `assistant/message` per segment and has no `assistant/chunk` event type,
++     * so delta chunks are not appended; the segment flush carries the text.
++     * @param chunk - ignored translated chunk.
++     * @returns nothing.
++     */
+     emitChunk(chunk) {
++        void chunk;
+         const step = this.segmenter.assistantSegmentStep;
+         if (step === undefined) {
+             // 内部不变量：chunk 只可能存在于开放的 assistant segment 内（feedContentChunk/
+             // feedPlan 先经 ensureAssistantSegment 开段）。走到这里即翻译器内部状态破损。
+             throw new Error('dsh-acp translate: emitChunk without an open presentation segment (internal invariant violated)');
+         }
+-        const event = this.sink.append('assistant/chunk', { turn: this.turnNumber, step, chunk });
+-        this.chunkSeqs.push(event.seq);
+-        return event;
+     }
+     /**
+    * 确保当前有开放的 assistant segment（文本/plan/占位内容落盘前调用）；
+@@ -1230,18 +1234,14 @@
          const callTitle = boundAcpToolTitle(update.title) ?? acpUnknownToolName(update.toolCallId);
          const assistantCall = {
              type: 'tool-call',
@@ -428,6 +753,19 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
              // 轨迹使用 assistant block 的 name 展示；这里保留 ACP 的人类可读标题。
              // 独立 tool/call 仍使用稳定 wire name，以命中插件的 keyed toolview。
              name: callTitle,
+             arguments: JSON.stringify(update.rawInput ?? {}),
+         };
+-        const callChunk = this.sink.append('assistant/chunk', {
+-            turn: this.turnNumber,
+-            step,
+-            chunk: { type: 'block-end', index: 0, block: assistantCall },
+-        });
+-        events.push(callChunk);
++        // DSH 0.2 has no `assistant/chunk`: the tool-call message below is the
++        // first committed record of this segment.
+         events.push(this.sink.append('assistant/message', {
+             turn: this.turnNumber,
+             step,
 @@ -1249,12 +1249,13 @@
                  content: [assistantCall],
                  source: { provider: this.currentRoute.provider, model: this.effectiveModel() },
@@ -466,7 +804,7 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
          this.blocks = [];
 diff -ruN a/lib/util/assert-never.js b/lib/util/assert-never.js
 --- a/lib/util/assert-never.js	1970-01-01 08:00:00.000000000 +0800
-+++ b/lib/util/assert-never.js	2026-11-01 18:15:12.000000000 +0800
++++ b/lib/util/assert-never.js	2026-11-01 20:11:23.839774152 +0800
 @@ -0,0 +1,4 @@
 +/** Exhaustiveness guard for the adapter's closed unions. */
 +export function assertNever(value, context = 'unexpected value') {
@@ -474,7 +812,7 @@ diff -ruN a/lib/util/assert-never.js b/lib/util/assert-never.js
 +}
 diff -ruN a/package.json b/package.json
 --- a/package.json	1985-10-26 16:15:00.000000000 +0800
-+++ b/package.json	2026-11-01 19:20:47.000000000 +0800
++++ b/package.json	2026-11-01 20:11:23.839774152 +0800
 @@ -48,19 +48,6 @@
    "dsh": {
      "bundle": {

@@ -85,6 +85,16 @@ export interface ResolvedConfig {
     readonly serverAliveCountMax: number
     readonly strictHostKeyChecking: boolean
   }
+  readonly native: {
+    /** Provider route the ACP adapter registers for the Claude Code profile. */
+    readonly provider: string
+    /** Model id sent with the first request; `default` follows the agent's own default. */
+    readonly model: string
+    /** Permission preset written into a session created by the native entry. */
+    readonly permissionPreset: string
+    /** Attach the new session to its DSH workspace so the sidebar shows it. */
+    readonly attachToWorkspace: boolean
+  }
 }
 
 /** Raw Loader configuration accepted by the plugin. */
@@ -140,6 +150,12 @@ export interface CcwConfigInput {
     serverAliveCountMax?: number
     strictHostKeyChecking?: boolean
   }
+  native?: {
+    provider?: string
+    model?: string
+    permissionPreset?: string
+    attachToWorkspace?: boolean
+  }
 }
 
 /** One host entry as written in cordis.yml. */
@@ -184,7 +200,7 @@ const PREFIX_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
   const issues: string[] = []
   const raw = isRecord(input) ? input : {}
-  rejectUnknownKeys(raw, ['dataDir', 'hosts', 'defaultHost', 'workspaces', 'acp', 'events', 'approvals', 'permissions', 'audit', 'logs', 'ssh'], 'config', issues)
+  rejectUnknownKeys(raw, ['dataDir', 'hosts', 'defaultHost', 'workspaces', 'acp', 'events', 'approvals', 'permissions', 'audit', 'logs', 'ssh', 'native'], 'config', issues)
 
   const home = env.DSH_HOME && env.DSH_HOME.length > 0 ? env.DSH_HOME : join(homedir(), '.dsh')
   const dataDir = pathField(raw.dataDir, join(home, 'claude-code'), 'dataDir', env, issues)
@@ -263,6 +279,14 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
   }
   if (logsConfig.files > 10) issues.push('logs.files must be 10 or fewer')
 
+  const nativeRaw = section(raw.native, ['provider', 'model', 'permissionPreset', 'attachToWorkspace'], 'native', issues)
+  const nativeConfig = {
+    provider: stringField(nativeRaw.provider, 'acp-claude-code', 'native.provider', issues),
+    model: stringField(nativeRaw.model, 'default', 'native.model', issues),
+    permissionPreset: stringField(nativeRaw.permissionPreset, 'danger-full-access', 'native.permissionPreset', issues),
+    attachToWorkspace: booleanField(nativeRaw.attachToWorkspace, true, 'native.attachToWorkspace', issues),
+  }
+
   if (issues.length > 0) throw new CcwConfigError(issues)
 
   return {
@@ -291,6 +315,7 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
     audit: auditConfig,
     logs: logsConfig,
     ssh: sshConfig,
+    native: nativeConfig,
   }
 }
 

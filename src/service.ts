@@ -23,6 +23,7 @@ import { findAllowOnce, findAllowWithUpdates, findReject, isHighRiskCommand, nor
 import { buildWidenRules, describeTool, matchesWidenedRule } from './gate/widen.ts'
 import { createHostOps } from './host/index.ts'
 import type { DirectoryEntry, HostOps } from './host/types.ts'
+import { NativeSessionBridge, type NativeSessionResult, type ServiceLookup } from './native/bridge.ts'
 import { CcwError, tail } from './util/errors.ts'
 import {
   createWorkspace,
@@ -52,6 +53,8 @@ export interface CcwServiceOptions {
   readonly workspaceController?: WorkspaceControllerLike
   readonly registry?: WorkspaceRegistry
   readonly hostFactory?: (id: string) => HostOps
+  /** DSH services used by the native-session entry, when composed. */
+  readonly services?: ServiceLookup
   readonly now?: () => number
   readonly newId?: () => string
   /** Home directory used for user-scope settings on local hosts. */
@@ -147,6 +150,7 @@ export class CcwService {
   readonly #audit: AuditLog
   readonly #auditReady: Promise<unknown>
   readonly #settings: SettingsWriter
+  readonly #native: NativeSessionBridge | undefined
   readonly #home: string
   readonly #now: () => number
   readonly #newId: () => string
@@ -179,6 +183,9 @@ export class CcwService {
     // prevent the plugin from loading.
     this.#auditReady = this.#audit.prune().catch(() => undefined)
     this.#settings = new SettingsWriter(this.#config.dataDir)
+    this.#native = options.services === undefined
+      ? undefined
+      : new NativeSessionBridge(options.services, this.#config.native, () => `session-${randomUUID()}`)
     this.#gate = new PermissionGate({
       timeoutMs: this.#config.approvals.timeoutMs,
       now: this.#now,
@@ -215,6 +222,57 @@ export class CcwService {
   /** True when DSH's workspace registry is available. */
   get registryAvailable(): boolean {
     return this.#registry.available
+  }
+
+  /** True when the native Claude-session entry can reach the DSH Agent service. */
+  get nativeAvailable(): boolean {
+    return this.#native?.available === true
+  }
+
+  /**
+   * Create a DSH-native Session on the configured ACP provider for one
+   * workspace, so Claude runs inside DSH's conversation UI.
+   *
+   * Native sessions currently run where DSH itself runs: the ACP adapter
+   * spawns the agent locally. Remote workspaces keep using the console, which
+   * owns the SSH execution path.
+   *
+   * @param workspaceId - Plugin workspace id.
+   * @returns the created Session, attachment state, and non-fatal warnings.
+   * @throws {CcwError} `workspace-not-found`, `host-unsupported`,
+   * `native-unavailable`, `workspace-registration-failed`, or `native-session-failed`.
+   */
+  async createNativeSession(workspaceId: string): Promise<NativeSessionResult> {
+    const workspace = await this.#workspaces.get(workspaceId)
+    if (workspace === undefined || workspace.state !== 'active') {
+      throw new CcwError('workspace-not-found', `workspace ${workspaceId} is not active`, { workspaceId })
+    }
+    if (workspace.host.kind !== 'local') {
+      throw new CcwError(
+        'host-unsupported',
+        `native Claude sessions run on the DSH host only; workspace ${workspace.title} runs on ${workspace.host.alias}. Use the Claude console for remote workspaces.`,
+        { workspaceId, hostId: workspace.hostId },
+      )
+    }
+    if (this.#native === undefined) {
+      throw new CcwError(
+        'native-unavailable',
+        'native Claude sessions are not configured for this Host; load the plugin through DSH so its Agent service is available',
+        { workspaceId },
+      )
+    }
+    const dshWorkspaceId = await this.#ensureDshWorkspaceId(workspaceId)
+    return this.#native.create({ cwd: workspace.dir, ...(dshWorkspaceId === undefined ? {} : { dshWorkspaceId }) })
+  }
+
+  async #ensureDshWorkspaceId(workspaceId: string): Promise<string | undefined> {
+    const workspace = await this.#workspaces.get(workspaceId)
+    if (workspace?.dshWorkspaceId !== undefined) return workspace.dshWorkspaceId
+    if (workspace === undefined || !this.#registry.available) return undefined
+    const registration = await this.#registry.register({ path: workspace.dir, title: workspace.title })
+    if (registration === undefined) return undefined
+    await this.#workspaces.update(workspaceId, { dshWorkspaceId: registration.id })
+    return registration.id
   }
 
   /**

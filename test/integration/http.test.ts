@@ -23,6 +23,7 @@ interface ApiBody {
   data?: {
     defaultHost?: string
     registryAvailable?: boolean
+    native?: { available?: boolean; provider?: string; model?: string; permissionPreset?: string }
     workspace?: { id?: string; title?: string; dir?: string }
     workspaces?: unknown[]
     plan?: unknown
@@ -51,6 +52,12 @@ test('serves status, creates workspaces, and reports validation errors', async (
     assert.equal(status.ok, true)
     assert.equal(status.data!.defaultHost, 'local')
     assert.equal(status.data!.registryAvailable, false)
+    assert.deepEqual(status.data!.native, {
+      available: false,
+      provider: 'acp-claude-code',
+      model: 'default',
+      permissionPreset: 'danger-full-access',
+    })
 
     const created = await jsonOf(await fetch(`${http.base}/workspaces/create`, {
       method: 'POST',
@@ -82,6 +89,23 @@ test('serves status, creates workspaces, and reports validation errors', async (
 
     const missing = await jsonOf(await fetch(`${http.base}/plans?dshSessionId=unknown`))
     assert.equal(missing.data!.plan, null)
+
+    const unknownWorkspace = await fetch(`${http.base}/sessions/native-create`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'ws_missing' }),
+    })
+    assert.equal(unknownWorkspace.status, 404)
+    assert.equal((await jsonOf(unknownWorkspace)).error!.code, 'workspace-not-found')
+
+    const nativeWithoutServices = await fetch(`${http.base}/sessions/native-create`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceId }),
+    })
+    assert.equal(nativeWithoutServices.status, 400)
+    const nativeBody = await jsonOf(nativeWithoutServices)
+    assert.equal(nativeBody.error!.code, 'native-unavailable')
   } finally {
     await http.close()
     await service.close()
