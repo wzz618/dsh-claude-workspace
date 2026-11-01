@@ -1129,6 +1129,7 @@ window.__ModuleLoader__.load({
 							? { modes: result.modes, configOptions: result.configOptions }
 							: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
 						if (shape !== null && shape !== undefined) setOptions(shape)
+						setOpened(true)
 						setNotice(t('sessionOpened'))
 					} catch (failure) {
 						setError(failure.message)
