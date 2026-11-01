@@ -8,7 +8,7 @@
 //   slow            — prompt stays running until session/cancel
 //   load            — session/load replays two historical updates
 import { createInterface } from 'node:readline'
-import { writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 if (process.argv.includes('--version')) {
@@ -16,7 +16,23 @@ if (process.argv.includes('--version')) {
   process.exit(0)
 }
 
-const scenario = process.argv[2] || 'perm'
+const requestedScenario = process.argv[2] || 'perm'
+let scenario = requestedScenario
+
+// `die` and `die-pending` model one crashed process per workspace: the first
+// process leaves a marker and exits mid-turn; the process started after the
+// marker exists removes it and behaves like `perm`, so reconnect tests can
+// recover on the next spawn.
+if (requestedScenario === 'die' || requestedScenario === 'die-pending') {
+  const marker = join(process.cwd(), '.ccw-die-marker')
+  if (existsSync(marker)) {
+    rmSync(marker)
+    scenario = 'perm'
+  } else {
+    writeFileSync(marker, '1')
+    scenario = requestedScenario
+  }
+}
 const sessions = new Map()
 const activePrompts = new Map()
 let nextServerId = 1000
@@ -30,6 +46,25 @@ const modesState = {
     { id: 'acceptEdits', name: 'Accept edits' },
     { id: 'plan', name: 'Plan' },
   ],
+}
+
+const permissionOptions = [
+  { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+  { optionId: 'allow-updates', name: "Yes, and don't ask again", kind: 'allow_with_updates' },
+  { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+]
+
+function permissionRequest(sessionId, cwd, title = 'Write a.txt') {
+  return {
+    sessionId,
+    toolCall: {
+      toolCallId: 't1',
+      title,
+      kind: 'edit',
+      rawInput: { file_path: join(cwd, 'a.txt'), content: 'hello' },
+    },
+    options: permissionOptions,
+  }
 }
 
 const configOptions = [
@@ -124,11 +159,7 @@ async function runTurn(promptId, sessionId) {
   const answer = await request('session/request_permission', {
     sessionId,
     toolCall: { toolCallId: 't1', title: finalTitle, kind, rawInput },
-    options: [
-      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
-      { optionId: 'allow-updates', name: "Yes, and don't ask again", kind: 'allow_with_updates' },
-      { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
-    ],
+    options: permissionOptions,
   })
   const optionId = answer?.outcome?.optionId
   if (typeof optionId !== 'string' || optionId.startsWith('reject')) {
@@ -142,6 +173,20 @@ async function runTurn(promptId, sessionId) {
 
 function startPrompt(promptId, sessionId) {
   activePrompts.set(promptId, sessionId)
+  const session = sessions.get(sessionId)
+  const cwd = session === undefined ? process.cwd() : session.cwd
+  if (scenario === 'die' || scenario === 'die-pending') {
+    notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'about to crash' } })
+    const pending = request('session/request_permission', permissionRequest(sessionId, cwd, 'Write a.txt'))
+    if (scenario === 'die') {
+      void pending.then(() => {
+        setTimeout(() => process.exit(0), 100)
+      })
+    } else {
+      setTimeout(() => process.exit(0), 400)
+    }
+    return
+  }
   if (scenario === 'slow') {
     notify(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } })
     promptTimers.set(promptId, setTimeout(() => finishPrompt(promptId, { stopReason: 'end_turn' }), 60_000))

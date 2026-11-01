@@ -11,7 +11,7 @@
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
-| P3 远程 | **P3a 完成，跨机待验证** | `HostOps` ssh 实现、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写（「放宽」可在远程落盘/撤销）；localhost SSH 真机 PASS。**跨物理机与断线重连尚未验证。** |
+| P3 远程 | **P3a/P3b 完成，跨机待验证** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写；断线标记、pending 过期审计、`sessions/reconnect` 与控制台重连按钮。localhost SSH 真机 PASS；**独立物理机尚未验证。** |
 | P4 细节对齐 | 未开始 | 会话树、子 agent、斜杠命令、@ 文件、图片 UI、模型/effort 选择器（API 已有）。 |
 | P5 硬化 | 部分 | 原子写、审计、审计保留、行/输出上限；未做打包发布、兼容矩阵 CI。 |
 
@@ -28,7 +28,7 @@
 
 ## 已验证行为（自动化）
 
-`npm test`：114 个用例全部通过。
+`npm test`：116 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -102,7 +102,18 @@
 
 `test/real/real-ssh.ts` 已在 localhost SSH 真机验证：远程 `Edit(ccw-e2e-ssh-sub/**)` 放宽写入远端 `.claude/settings.local.json`、文件可写、规则可撤销；测试结束后恢复/删除它创建的文件与设置备份。
 
-剩余：独立物理机回归、断网/重连、远端 `user` 级写入的真机验证。
+剩余：独立物理机回归、断网/重连的真机验证、远端 `user` 级写入的真机验证。
+
+## P3b 断线与重连（2026-11-01）
+
+- 连接关闭时：池标记 workspace `disconnected`，该 workspace 的待审批请求全部标 `expired` 并写审计（`expired:connection closed`），不自动重放未确认的 prompt
+- 新增 `CcwService.reconnectSession()` 与 `POST /sessions/reconnect`：关闭旧进程、启动新进程、`session/load` 回放，再恢复绑定的 model/effort/mode
+- 客户端：状态为 `disconnected` 时显示「重连」按钮，重连后从 seq 0 重新拉取回放事件；断线期间 composer 禁用
+- 假 ACP 集成测试覆盖：
+  - 允许后进程崩溃 → prompt 拒绝、状态 `disconnected`、重连 `resumed=true`、后续正常回合
+  - 待审批时崩溃 → pending 清零、审计出现 `expired:connection closed`、重连成功
+
+剩余：真实 SSH 断网/杀进程回归、跨物理机。
 
 ### DSH Loader 装配（隔离环境）
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import type { CcwConfigInput } from '../../src/config.ts'
 import { createService, type CcwService } from '../../src/service.ts'
 import type { CcwEvent } from '../../src/acp/mapping.ts'
-import { makeTempDir, removeTempDir, waitFor } from '../helpers/temp.ts'
+import { makeTempDir, removeTempDir, waitFor, waitForAsync } from '../helpers/temp.ts'
 
 const fakeServer = fileURLToPath(new URL('../fake-acp/server.mjs', import.meta.url))
 
@@ -226,6 +226,57 @@ test('two sessions in one workspace route permission requests independently', as
     await context.service.answerPermission(b.requestId, 'allow-once')
     await Promise.all([promptA, promptB])
     assert.equal(context.service.pendingApprovals().length, 0)
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('a crashed process marks the session disconnected and reconnect recovers', async () => {
+  const context = await setup('die')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'crash after approval' })
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending.requestId, 'allow-once')
+    await assert.rejects(prompt, /connection closed|disconnected/)
+
+    const disconnected = await waitForAsync(async () => {
+      const result = await context.service.reattach('dsh-1')
+      return result.state === 'disconnected' ? result : undefined
+    })
+    assert.equal(disconnected.running, false)
+
+    const reopened = await context.service.reconnectSession('dsh-1')
+    assert.equal(reopened.resumed, true)
+    const prompt2 = context.service.prompt({ dshSessionId: 'dsh-1', text: 'create a.txt after reconnect' })
+    const pending2 = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending2.requestId, 'allow-once')
+    const outcome = await prompt2
+    assert.equal(outcome.stopReason, 'end_turn')
+    assert.equal(await readFile(join(context.workspaceDir, 'a.txt'), 'utf8'), 'hello\n')
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('a crash with a pending approval expires it and is audited', async () => {
+  const context = await setup('die-pending')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'crash while waiting' })
+    await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await assert.rejects(prompt, /connection closed|disconnected/)
+    await waitForAsync(async () => context.service.pendingApprovals('dsh-1').length === 0 ? true : undefined)
+
+    const day = new Date().toISOString().slice(0, 10)
+    const expired = await waitForAsync(async () => {
+      const entries = await context.service.auditEntries(day)
+      return entries.find((entry) => entry.kind === 'permission' && entry.decision.startsWith('expired:'))
+    })
+    assert.match(expired.decision, /connection closed/)
+
+    const reopened = await context.service.reconnectSession('dsh-1')
+    assert.equal(reopened.resumed, true)
   } finally {
     await context.cleanup()
   }

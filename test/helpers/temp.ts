@@ -22,3 +22,17 @@ export async function waitFor<T>(probe: () => T | undefined | false, timeoutMs =
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
 }
+
+/** Async variant of {@link waitFor} for store or network reads. */
+export async function waitForAsync<T>(
+  probe: () => Promise<T | undefined | false>,
+  timeoutMs = 5000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const value = await probe()
+    if (value !== undefined && value !== false) return value
+    if (Date.now() > deadline) throw new Error('waitForAsync timed out')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}

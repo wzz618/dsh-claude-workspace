@@ -74,6 +74,8 @@ window.__ModuleLoader__.load({
 			stateBusy: '运行中',
 			stateDisconnected: '已断开',
 			stateStopped: '未启动',
+			reconnect: '重连',
+			reconnecting: '重连中…',
 			stop: '停止',
 			approvals: '待审批',
 			noApprovals: '没有待审批的请求。',
@@ -152,6 +154,8 @@ window.__ModuleLoader__.load({
 			stateBusy: 'running',
 			stateDisconnected: 'disconnected',
 			stateStopped: 'stopped',
+			reconnect: 'Reconnect',
+			reconnecting: 'Reconnecting…',
 			stop: 'Stop',
 			approvals: 'Pending approvals',
 			noApprovals: 'No pending requests.',
@@ -545,6 +549,7 @@ window.__ModuleLoader__.load({
 				const [runtime, setRuntime] = useState('stopped')
 				const [promptText, setPromptText] = useState('')
 				const [sending, setSending] = useState(false)
+				const [reconnecting, setReconnecting] = useState(false)
 				const [busy, setBusy] = useState(false)
 				const [error, setError] = useState('')
 				const [notice, setNotice] = useState('')
@@ -657,6 +662,27 @@ window.__ModuleLoader__.load({
 				const stop = () => run(async () => {
 					await post('/sessions/cancel', { dshSessionId: sessionId })
 				})
+
+				const reconnect = async () => {
+					setReconnecting(true)
+					setError('')
+					try {
+						const result = await post('/sessions/reconnect', { dshSessionId: sessionId })
+						sinceRef.current = 0
+						setEvents([])
+						setPending([])
+						setPlan(null)
+						const shape = result.configOptions && result.configOptions.length > 0
+							? { modes: result.modes, configOptions: result.configOptions }
+							: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
+						if (shape !== null && shape !== undefined) setOptions(shape)
+						setNotice(t('sessionOpened'))
+					} catch (failure) {
+						setError(failure.message)
+					} finally {
+						setReconnecting(false)
+					}
+				}
 
 				const answer = (requestId, optionId) => run(async () => {
 					await post('/approvals/answer', { requestId, optionId })
@@ -840,6 +866,14 @@ window.__ModuleLoader__.load({
 							h('span', { children: stateLabel }),
 							h('span', { style: { ...styles.muted, flex: '1 1 auto' }, children: sessionId || '' }),
 							running ? h('button', { style: styles.danger, onClick: () => void stop(), children: t('stop') }) : null,
+							runtime === 'disconnected'
+								? h('button', {
+									style: styles.primary,
+									disabled: reconnecting,
+									onClick: () => void reconnect(),
+									children: reconnecting ? t('reconnecting') : t('reconnect'),
+								})
+								: null,
 							h('button', { style: styles.button, onClick: () => void refreshCatalog(), children: t('refresh') }),
 						].filter(Boolean) }),
 						h('div', { style: styles.panelRow, children: [
@@ -898,7 +932,7 @@ window.__ModuleLoader__.load({
 						h('div', { style: styles.panelRow, children: [
 							h('button', {
 								style: styles.primary,
-								disabled: busy || sending || running || !opened || promptText.trim().length === 0,
+								disabled: busy || sending || running || !opened || runtime === 'disconnected' || promptText.trim().length === 0,
 								onClick: () => void sendPrompt(),
 								children: sending ? t('sending') : t('send'),
 							}),

@@ -511,6 +511,22 @@ export class CcwService {
     await this.#auditDecision({ workspace, dshSessionId, kind: 'session', decision: 'cancel-requested' })
   }
 
+  /**
+   * Restarts the workspace process and reloads the bound ACP session.
+   *
+   * Reconnection never replays an unconfirmed prompt: it only rebuilds the
+   * transport and calls `session/load`, matching the ACP ambiguity rule.
+   *
+   * @param dshSessionId - DSH session to reconnect.
+   * @returns The reopened session state.
+   */
+  async reconnectSession(dshSessionId: string): Promise<OpenSessionResult> {
+    const binding = await this.#requireBinding(dshSessionId)
+    const workspace = await this.#requireWorkspace(binding.workspaceId)
+    await this.#pool.close(workspace.id, 'requested')
+    return this.openSession({ workspaceId: workspace.id, dshSessionId })
+  }
+
   /** Answers a pending permission request with one of Claude's own option ids. */
   async answerPermission(requestId: string, optionId: string): Promise<void> {
     const record = this.#gate.get(requestId)
