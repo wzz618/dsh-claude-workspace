@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { atomicWriteFile, atomicWriteJson, readJsonFile, readTextFileOrUndefined } from '../util/atomic.ts'
+import type { HostOps } from '../host/types.ts'
+import { atomicWriteJson, readJsonFile } from '../util/atomic.ts'
 import { CcwError } from '../util/errors.ts'
 import { SerialQueue } from '../util/queue.ts'
 
@@ -10,6 +10,8 @@ export interface WrittenRule {
   readonly id: string
   /** ISO-8601 creation instant. */
   readonly ts: string
+  /** Host key from the resolved `hosts` map. */
+  readonly host: string
   /** Settings file the rule was appended to. */
   readonly file: string
   readonly rule: string
@@ -26,6 +28,8 @@ interface WrittenRulesFile {
 
 /** Metadata attached to one append. */
 export interface RuleMetadata {
+  /** Host that owns the settings file; defaults to `local`. */
+  readonly host?: string
   readonly tool?: string
   readonly workspaceId?: string
   readonly sessionId?: string
@@ -41,13 +45,14 @@ export interface EnsureAllowedResult {
 }
 
 /**
- * Appends CCW-generated allow rules to a Claude settings file.
+ * Appends CCW-generated allow rules to a Claude settings file on any host.
  *
  * The writer is deliberately strict: a missing file is initialized, but an
  * existing file that does not parse as JSON, whose root is not an object, or
  * whose `permissions.allow` is not a string array is left untouched and
  * reported. Silently rewriting such a file would destroy user configuration.
- * Every replacement is atomic with a `.bak` copy and a read-back check.
+ * Every replacement goes through the host's atomic writer with a `.bak` copy
+ * and a read-back check, so the same logic serves local and SSH workspaces.
  */
 export class SettingsWriter {
   readonly #dataDir: string
@@ -60,17 +65,23 @@ export class SettingsWriter {
   }
 
   /**
-   * Ensures every rule is present in `file`.
+   * Ensures every rule is present in `file` on `host`.
    *
-   * @param file - Absolute settings path.
+   * @param host - Host that owns the settings file.
+   * @param file - Absolute settings path on that host.
    * @param rules - Rule texts to append; duplicates are skipped.
    * @param metadata - Trace metadata stored in the revocation sidecar.
    * @returns Which rules were added.
    * @throws {CcwError} With `settings-invalid` or `settings-write-failed`.
    */
-  async ensureAllowed(file: string, rules: readonly string[], metadata: RuleMetadata = {}): Promise<EnsureAllowedResult> {
-    return this.#queue.run(file, async () => {
-      const previousText = await readTextFileOrUndefined(file)
+  async ensureAllowed(
+    host: HostOps,
+    file: string,
+    rules: readonly string[],
+    metadata: RuleMetadata = {},
+  ): Promise<EnsureAllowedResult> {
+    return this.#queue.run(`${host.id}:${file}`, async () => {
+      const previousText = await host.readText(file)
       const document = parseSettings(previousText, file)
       const permissions = ensurePermissions(document, file)
       const allow = ensureAllowArray(permissions, file)
@@ -83,11 +94,10 @@ export class SettingsWriter {
         added.push(rule)
       }
       if (added.length === 0) return { changed: false, file, added: [], existing: rules }
-      const mode = await modeOf(file)
-      await atomicWriteFile(file, `${JSON.stringify(document, null, 2)}\n`, { backup: true, mode })
-      const verified = await verifyFile(file, rules)
+      await host.writeTextAtomic(file, `${JSON.stringify(document, null, 2)}\n`, { backup: true, mode: 0o600 })
+      const verified = await verifyFile(host, file, rules)
       if (!verified) {
-        await restore(file, previousText, mode)
+        await restore(host, file, previousText)
         throw new CcwError('settings-write-failed', `wrote ${file} but could not read the rules back; original restored`, { file })
       }
       await this.#record({ file, rules: added, metadata })
@@ -103,29 +113,29 @@ export class SettingsWriter {
   /**
    * Removes one CCW-written rule from its settings file and the sidecar.
    *
+   * @param host - Host that owns the recorded file.
    * @param id - Sidecar rule id.
    * @returns The removed record.
    * @throws {CcwError} When the id is unknown or the settings file is now invalid.
    */
-  async revoke(id: string): Promise<WrittenRule> {
+  async revoke(host: HostOps, id: string): Promise<WrittenRule> {
     const sidecar = await this.#readSidecar()
     const entry = sidecar.rules.find((rule) => rule.id === id)
     if (entry === undefined) {
       throw new CcwError('settings-invalid', `no CCW-written rule with id ${id}`, { id })
     }
-    await this.#queue.run(entry.file, async () => {
-      const previousText = await readTextFileOrUndefined(entry.file)
+    await this.#queue.run(`${host.id}:${entry.file}`, async () => {
+      const previousText = await host.readText(entry.file)
       const document = parseSettings(previousText, entry.file)
       const permissions = ensurePermissions(document, entry.file)
       const allow = ensureAllowArray(permissions, entry.file)
       const remaining = allow.filter((rule) => rule !== entry.rule)
       if (remaining.length === allow.length) return
       permissions.allow = remaining
-      const mode = await modeOf(entry.file)
-      await atomicWriteFile(entry.file, `${JSON.stringify(document, null, 2)}\n`, { backup: true, mode })
-      const verified = await verifyFileAbsent(entry.file, entry.rule)
+      await host.writeTextAtomic(entry.file, `${JSON.stringify(document, null, 2)}\n`, { backup: true, mode: 0o600 })
+      const verified = await verifyFileAbsent(host, entry.file, entry.rule)
       if (!verified) {
-        await restore(entry.file, previousText, mode)
+        await restore(host, entry.file, previousText)
         throw new CcwError('settings-write-failed', `could not verify removal from ${entry.file}; original restored`, {
           file: entry.file,
           rule: entry.rule,
@@ -142,6 +152,7 @@ export class SettingsWriter {
     const added: WrittenRule[] = input.rules.map((rule) => ({
       id: `rule_${randomUUID().slice(0, 8)}`,
       ts,
+      host: input.metadata.host ?? 'local',
       file: input.file,
       rule,
       ...(input.metadata.tool === undefined ? {} : { tool: input.metadata.tool }),
@@ -157,7 +168,8 @@ export class SettingsWriter {
     if (file.version !== 1 || !Array.isArray(file.rules)) {
       throw new CcwError('settings-invalid', 'written-rules.json has an unsupported format', {})
     }
-    return file
+    // Sidecars written before remote persistence lack `host`; those rules are local.
+    return { version: 1, rules: file.rules.map((rule) => ({ ...rule, host: rule.host ?? 'local' })) }
   }
 
   async #writeSidecar(file: WrittenRulesFile): Promise<void> {
@@ -168,7 +180,7 @@ export class SettingsWriter {
 /**
  * Resolves the settings file a rule is written to.
  *
- * @param workspaceDir - Session working directory.
+ * @param workspaceDir - Session working directory on the host.
  * @param target - `project` for `.claude/settings.local.json`, `user` for `~/.claude/settings.json`.
  * @param home - Home directory on the host that owns the file.
  * @returns Absolute settings path.
@@ -223,8 +235,8 @@ function ensureAllowArray(permissions: Record<string, unknown> & { allow?: strin
   return allow
 }
 
-async function verifyFile(file: string, rules: readonly string[]): Promise<boolean> {
-  const text = await readTextFileOrUndefined(file)
+async function verifyFile(host: HostOps, file: string, rules: readonly string[]): Promise<boolean> {
+  const text = await host.readText(file)
   if (text === undefined) return false
   try {
     const document = JSON.parse(text) as unknown
@@ -236,8 +248,8 @@ async function verifyFile(file: string, rules: readonly string[]): Promise<boole
   }
 }
 
-async function verifyFileAbsent(file: string, rule: string): Promise<boolean> {
-  const text = await readTextFileOrUndefined(file)
+async function verifyFileAbsent(host: HostOps, file: string, rule: string): Promise<boolean> {
+  const text = await host.readText(file)
   if (text === undefined) return true
   try {
     const document = JSON.parse(text) as unknown
@@ -249,21 +261,12 @@ async function verifyFileAbsent(file: string, rule: string): Promise<boolean> {
   }
 }
 
-async function restore(file: string, previousText: string | undefined, mode: number): Promise<void> {
+async function restore(host: HostOps, file: string, previousText: string | undefined): Promise<void> {
   if (previousText === undefined) {
-    await rm(file, { force: true })
+    await host.removeFile(file)
     return
   }
-  await atomicWriteFile(file, previousText, { mode })
-}
-
-async function modeOf(file: string): Promise<number> {
-  try {
-    const info = await stat(file)
-    return info.mode & 0o777
-  } catch {
-    return 0o600
-  }
+  await host.writeTextAtomic(file, previousText, { mode: 0o600 })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

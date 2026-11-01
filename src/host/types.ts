@@ -34,6 +34,14 @@ export interface SpawnOptions {
   readonly env?: Readonly<Record<string, string>>
 }
 
+/** Durable replacement options for one host file. */
+export interface AtomicFileOptions {
+  /** Copies the previous file to `<path>.bak` before replacing it. */
+  readonly backup?: boolean
+  /** Permission bits for the new file, for example 0o600. */
+  readonly mode?: number
+}
+
 /** A started child process with stream access and one exit promise. */
 export interface HostProcess {
   readonly pid: number | undefined
@@ -57,6 +65,14 @@ export interface HostOps {
   stat(path: string): Promise<PathInfo>
   mkdirp(path: string): Promise<void>
   realpath(path: string): Promise<string>
+  /** Reads a text file, or undefined when it does not exist. */
+  readText(path: string): Promise<string | undefined>
+  /** Replaces a file through a same-directory temporary file and rename. */
+  writeTextAtomic(path: string, content: string, options?: AtomicFileOptions): Promise<void>
+  /** Removes a file if present. */
+  removeFile(path: string): Promise<void>
+  /** The host account's home directory. */
+  home(): Promise<string>
   probe(executable: string, args?: readonly string[]): Promise<ProbeResult>
   exec(argv: readonly string[], options?: ExecOptions): Promise<ExecResult>
   spawn(argv: readonly string[], options?: SpawnOptions): Promise<HostProcess>

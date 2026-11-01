@@ -2,7 +2,7 @@
 
 给 DeepSeek Harness 用的「Claude Code 工作区」插件：按 DSH 工作区管理本地或 SSH 主机上的 Claude Code 会话，通过 ACP（Agent Client Protocol）保留 Claude 自己的工具、权限选项、diff、计划与模式，并把每次权限决定写入审计。
 
-本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）**。P2b 的 agent-loop 接管、以及 P3–P5（远程「放宽」写规则、子 agent、发布硬化等）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
+本仓库实现的是 `dsh-claude-code-workspace-plugin-plan.md` 的 **P1（可运行核心）+ P2a（右侧栏会话控制台）+ P3 远程设置桥**。P2b 的 agent-loop 接管、跨物理机/重连验证，以及 P4–P5（子 agent、发布硬化等）尚未实现，详见 [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)。
 
 ## 它做什么
 
@@ -10,7 +10,7 @@
 - **会话**：一个 DSH 会话绑定一个 Claude Code（ACP）会话；每个工作区一个常驻 `claude-agent-acp` 进程，多会话复用。DSH 重启后用 `session/load` 恢复，并重新应用模型/思考强度（`session/load` 会把模型重置为 `sonnet`）。
 - **权限**：Claude 给什么选项就展示什么（`allow_once` / `allow-with-updates` / `reject…`），原样回传；额外提供「放宽」：本命令 / 命令前缀 / 本工具。默认审批**永不超时**。
 - **远程**：`ssh -T -o BatchMode=yes -- <alias> claude-agent-acp` 直接承载 stdio，不暴露端口、不写桥、不要求目标机装 DSH。
-- **审计**：`<dataDir>/audit/YYYY-MM-DD.jsonl`，只记元数据（主机、工作区、会话、工具、参数摘要、决定、耗时）。
+- **审计**：`<dataDir>/audit/YYYY-MM-DD.jsonl`，只记元数据（主机、工作区、会话、工具、参数摘要、决定、耗时）；服务启动时按 `audit.retainDays` 清理过期文件。
 - **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、历史回放分隔与待审批计数；设置页保留主机/工作区/规则管理。
 
 不处理 Claude 登录/凭据：目标机上的 `claude` 必须已经登录。插件不读取、不缓存、不转发任何凭据。
@@ -123,7 +123,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 
 路径规则相对会话 cwd；绝对路径不生效（P0 实测），因此超出 cwd 的编辑会被拒绝放宽。写规则前必须预览；高风险命令（`rm -rf /`、`sudo`、`dd`、`mkfs`、`curl\|sh` 等）和用户级写入需要 `confirmed: true`。
 
-已知缺口：**远程工作区的「放宽」尚未实现**（远程写设置需要 P3 的 SSH 设置桥）；远程仍可使用 Claude 自己的「don't ask again」。
+远程工作区同样支持「放宽」：`HostOps` 提供远端读取与原子写（同目录临时文件 + `mv`、`.bak` 备份、回读校验），项目级规则写到远端 cwd 的 `.claude/settings.local.json`，用户级写到远端 `$HOME/.claude/settings.json`。
 
 ## 本地 HTTP API
 
@@ -174,7 +174,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ```sh
 npm install
 npm run typecheck      # src + test
-npm test               # 107 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
+npm test               # 114 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
 npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run build          # tsc -> lib/，并复制浏览器半区
@@ -183,6 +183,8 @@ npm run build          # tsc -> lib/，并复制浏览器半区
 集成测试使用 `test/fake-acp/server.mjs`（可编程 ACP 服务端），覆盖：允许/拒绝落盘差异、diff、前缀放宽与规则撤销、取消、`session/load` 回放、双会话权限路由、健康检查、HTTP 校验。
 
 `test/real/real-acp.ts` 在已登录的目标机上驱动真实 `claude-agent-acp`，覆盖：健康检查（握手 + 建会话）、允许、拒绝、`Edit(sub/**)` 放宽与撤销、转发「don't ask again」（Bash 会写带 `\(` 转义的规则）、执行中取消、`session/load` 回放与模型重设、重启恢复。默认使用 `claude-code-test` 目录，可用 `CCW_REAL_CWD` 与 `CCW_ACP_BIN` 覆盖；测试结束后恢复/删除它创建的文件，不触碰 `.claude/settings.json`。
+
+`test/real/real-ssh.ts` 通过真实 ssh 驱动远端 Claude Code，覆盖健康检查、远程 Write 允许/拒绝、远程 `Edit(sub/**)` 放宽（写远端设置、撤销、恢复原文件）。
 
 最近一次真机结果（本机，Claude Code 2.1.314 / claude-agent-acp 0.99.1 / Node 24）：本地与 SSH（localhost）全部场景 PASS，`session/load` 回放 31 条事件。
 

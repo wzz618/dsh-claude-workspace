@@ -143,6 +143,7 @@ export class CcwService {
   readonly #gate: PermissionGate
   readonly #plans: PlanGate
   readonly #audit: AuditLog
+  readonly #auditReady: Promise<unknown>
   readonly #settings: SettingsWriter
   readonly #home: string
   readonly #now: () => number
@@ -172,6 +173,9 @@ export class CcwService {
         : new DshWorkspaceRegistry(options.workspaceController))
     this.#hostFactory = options.hostFactory
     this.#audit = new AuditLog(this.#config.audit.dir, { retainDays: this.#config.audit.retainDays, now: () => new Date(this.#now()) })
+    // Enforce the retention window once per service start; a failure must not
+    // prevent the plugin from loading.
+    this.#auditReady = this.#audit.prune().catch(() => undefined)
     this.#settings = new SettingsWriter(this.#config.dataDir)
     this.#gate = new PermissionGate({
       timeoutMs: this.#config.approvals.timeoutMs,
@@ -546,15 +550,10 @@ export class CcwService {
     if (binding === undefined || workspace === undefined) {
       throw new CcwError('permission-unknown-request', 'the request is not attached to a known session', { requestId })
     }
-    if (workspace.host.kind === 'ssh') {
-      throw new CcwError(
-        'widen-unsupported',
-        'widen rules for remote workspaces are not implemented yet; use Claude\'s own "don\'t ask again" option',
-        { workspaceId: workspace.id, host: workspace.host.alias },
-      )
-    }
+    const host = this.#host(workspace.hostId)
     const rules = buildWidenRules(record.toolCall, binding.cwd, scope, customRule)
-    const file = settingsTargetPath(binding.cwd, target, this.#home)
+    const home = target === 'user' ? await host.home() : this.#home
+    const file = settingsTargetPath(binding.cwd, target, home)
     const highRisk = isHighRiskCommand(describeTool(record.toolCall).command)
     return {
       requestId,
@@ -582,6 +581,13 @@ export class CcwService {
     }
     const target = input.target ?? this.#config.permissions.persist.target
     const preview = await this.previewWiden(input.requestId, input.scope, input.customRule, target)
+    const workspace = record.workspaceId === undefined ? undefined : await this.#workspaces.get(record.workspaceId)
+    if (workspace === undefined) {
+      throw new CcwError('permission-unknown-request', 'the request is not attached to a known workspace', {
+        requestId: input.requestId,
+      })
+    }
+    const host = this.#host(workspace.hostId)
     if (preview.requiresConfirmation && input.confirmed !== true) {
       throw new CcwError(
         'confirmation-required',
@@ -600,7 +606,7 @@ export class CcwService {
       }
       this.#gate.answer(input.requestId, option.optionId)
       await this.#auditDecision({
-        workspace: record.workspaceId === undefined ? undefined : await this.#workspaces.get(record.workspaceId),
+        workspace,
         dshSessionId: record.dshSessionId ?? record.sessionId,
         kind: 'widen',
         tool: record.toolCall.name ?? record.toolCall.title,
@@ -613,7 +619,8 @@ export class CcwService {
     if (allowOnce === undefined) {
       throw new CcwError('widen-unsupported', 'Claude did not offer a one-time allow option', { requestId: input.requestId })
     }
-    await this.#settings.ensureAllowed(preview.file, preview.rules, {
+    await this.#settings.ensureAllowed(host, preview.file, preview.rules, {
+      host: workspace.hostId,
       ...(toolNameOf(record.toolCall) === undefined ? {} : { tool: toolNameOf(record.toolCall)! }),
       ...(record.workspaceId === undefined ? {} : { workspaceId: record.workspaceId }),
       ...(record.dshSessionId === undefined ? {} : { sessionId: record.dshSessionId }),
@@ -625,7 +632,7 @@ export class CcwService {
     }
     this.#gate.answer(input.requestId, allowOnce.optionId)
     await this.#auditDecision({
-      workspace: record.workspaceId === undefined ? undefined : await this.#workspaces.get(record.workspaceId),
+      workspace,
       dshSessionId: record.dshSessionId ?? record.sessionId,
       kind: 'widen',
       tool: record.toolCall.name ?? record.toolCall.title,
@@ -640,9 +647,13 @@ export class CcwService {
     return this.#settings.listWrittenRules()
   }
 
-  /** Removes one CCW-written rule. */
+  /** Removes one CCW-written rule from the host that owns it. */
   async revokeRule(id: string): Promise<Awaited<ReturnType<SettingsWriter['revoke']>>> {
-    return this.#settings.revoke(id)
+    const entry = (await this.#settings.listWrittenRules()).find((rule) => rule.id === id)
+    if (entry === undefined) {
+      throw new CcwError('settings-invalid', `no CCW-written rule with id ${id}`, { id })
+    }
+    return this.#settings.revoke(this.#host(entry.host), id)
   }
 
   /** Changes model, effort, or mode for one session. */
@@ -968,6 +979,7 @@ export class CcwService {
     readonly decision: string
     readonly latencyMs?: number
   }): Promise<void> {
+    await this.#auditReady
     await this.#audit.append({
       host: input.workspace?.hostId ?? 'unknown',
       workspace: input.workspace?.id ?? 'unknown',

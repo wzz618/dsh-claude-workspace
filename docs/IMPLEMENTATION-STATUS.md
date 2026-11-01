@@ -11,7 +11,7 @@
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
-| P3 远程 | 部分 | `HostOps` ssh 实现、`ssh -T` stdio、keepalive、探测、远端建目录；未做远端写设置（「放宽」在远程被明确拒绝）。**远端尚未真机回归。** |
+| P3 远程 | **P3a 完成，跨机待验证** | `HostOps` ssh 实现、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写（「放宽」可在远程落盘/撤销）；localhost SSH 真机 PASS。**跨物理机与断线重连尚未验证。** |
 | P4 细节对齐 | 未开始 | 会话树、子 agent、斜杠命令、@ 文件、图片 UI、模型/effort 选择器（API 已有）。 |
 | P5 硬化 | 部分 | 原子写、审计、审计保留、行/输出上限；未做打包发布、兼容矩阵 CI。 |
 
@@ -22,13 +22,13 @@
 | 1 | 骨架 + bundle patch（禁用 `agent-loop` / `ui-model-selection`，插自己的行） | 部分：`package.json`、`cordis.patch.yml`、`apply()` 可加载；**只插入插件行**，两行未禁用（P1 不接管会话，禁用会让普通会话失去 loop）。`--dump-config` 未在本机 DSH 环境验证。 |
 | 2 | Host ACP 客户端 + workspace store（本地） | 完成：`config`、`host/*`、`acp/*`、`workspace/*`、`gate/*`、`audit`、`service`；用假 ACP 全流程验证。 |
 | 3 | 客户端 UI：会话视图 + 工具卡 + 权限 Dock | P2a：`src/client.js` 注册右侧栏 tab type（`sidebar.right.pane.tab` / `.title`）与会话控制台；设置页保留管理功能。DSH 会话内联呈现仍待 P2b。 |
-| 4 | remote HostOps + 健康检查 | 本地真机完成；ssh 分支有代码与单测，**未在 ssh 目标上真机回归**；默认 no-cd 形态与 `cd … && exec` 形态都支持。 |
+| 4 | remote HostOps + 健康检查 | 本地与 localhost SSH 真机完成；远端设置读取/原子写与「放宽」已验证；**独立物理机与断线重连未验证**。 |
 | 5 | 恢复/并发/中断 | 完成：`session/load` 重放标记、load 后重设 model/effort、同工作区双会话权限路由、`session/cancel` → 卡片 `cancelled`。假 ACP 验证。 |
 | 6 | 硬化与打包 | 部分：原子写、`.bak`、回读校验、损坏 JSON 拒绝、审计、行上限、输出上限；冲突检测/安装卸载验证待 P2。 |
 
 ## 已验证行为（自动化）
 
-`npm test`：107 个用例全部通过。
+`npm test`：114 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -91,6 +91,19 @@
 
 剩余 P2b：接管 `agent-loop` / `ui-model-selection`。DSH 0.2.x 的 `AgentLoop` 通过 `private` 的 `initializeAgent`/发布流程创建 Agent，`@zaimokuza/dsh-acp-adapter` 用绑定 0.1.1-rc.2 的 host-compat 影子层绕开；这需要一次单独 spike，不能直接复用 P2a 的独立控制台。
 
+## P3a 远程设置桥（2026-11-01）
+
+`HostOps` 新增 `readText` / `writeTextAtomic` / `removeFile` / `home`：
+
+- 本地：复用 `atomicWriteFile`（临时文件 + fsync + rename + `.bak`）
+- SSH：`sh -c` + 同目录 `mktemp`、stdin 写入、`chmod 600`、`cp -p` 备份、`mv`；读取用 `cat`，缺失返回 `undefined`
+- `SettingsWriter` 改为按 host 读写；sidecar 记录 `host`，撤销时解析对应 host
+- 用户级规则的目标目录取远端 `$HOME`，不再固定本机 home
+
+`test/real/real-ssh.ts` 已在 localhost SSH 真机验证：远程 `Edit(ccw-e2e-ssh-sub/**)` 放宽写入远端 `.claude/settings.local.json`、文件可写、规则可撤销；测试结束后恢复/删除它创建的文件与设置备份。
+
+剩余：独立物理机回归、断网/重连、远端 `user` 级写入的真机验证。
+
 ### DSH Loader 装配（隔离环境）
 
 在临时 `DSH_HOME=/tmp/ccw-dsh-home` 下执行（未触碰 `~/.dsh`，验证后已删除）：
@@ -115,7 +128,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 
 1. **不 fork `dsh-acp-adapter`（Q8 结论）**：本轮按计划 §8.1 独立实现 ACP 客户端与运行时，不复制其 25k 行代码；许可证上无需携带其版权，但接管的 agent-loop 行仍待 P2。若 P2 发现其恢复/选择器实现不可替代，再评估 fork。
 2. **不接管 agent-loop / model-selection**：P1 用 loopback HTTP 控制面，装插件不影响普通 DSH 会话；因此 §8.5 的「加载时检测其他 agent-loop 接管并拒绝」尚未实现（目前不存在本插件注册 factory 的动作）。P2 必须先补冲突检测，再启用两行 patch。
-3. **远程「放宽」未实现**：`previewWiden` 对 ssh 工作区直接报 `widen-unsupported`，提示改用 Claude 自己的「don't ask again」。P3 需要 SSH 读/写/原子替换设置文件的通道。
+3. **远程「放宽」已实现，跨机未验证**：`HostOps` 新增 `readText`/`writeTextAtomic`/`removeFile`/`home`；SSH 侧用同目录临时文件 + `mv`、`.bak`、回读校验写设置，规则按 host 记入 sidecar 可撤销。localhost SSH 真机 PASS；独立物理机与断网重连仍在 P3 剩余范围。
 4. **无终端 PTY / 子 agent 会话树 / MCP 注入 / 历史缓存（IndexedDB）**：计划中的 P4 范围。
 5. **审计写失败不阻断请求**：`#auditDecision` 吞掉写入错误，避免审计盘满导致权限流程卡死；这属于有意的可用性取舍，P5 可改为显式告警。
 6. **健康检查版本探测**：使用主机配置的可执行文件（默认 `claude-agent-acp`），版本区间可配；探测不到版本时只做握手判断。

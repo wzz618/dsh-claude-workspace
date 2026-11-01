@@ -3,7 +3,7 @@ import { CcwError, tail } from '../util/errors.ts'
 import { LocalHost } from './local.ts'
 import { parseVersion } from './probe.ts'
 import { buildRemoteCommand } from './shell.ts'
-import type { ExecOptions, ExecResult, HostOps, HostProcess, PathInfo, ProbeResult, SpawnOptions } from './types.ts'
+import type { ExecOptions, ExecResult, HostOps, HostProcess, PathInfo, ProbeResult, SpawnOptions, AtomicFileOptions } from './types.ts'
 
 /** Options that shape one SSH host invocation. */
 export interface SshHostOptions {
@@ -78,6 +78,88 @@ export class SshHost implements HostOps {
       })
     }
     return result.stdout.trim()
+  }
+
+  async readText(path: string): Promise<string | undefined> {
+    const script = 'if [ ! -e "$0" ] && [ ! -L "$0" ]; then exit 3; fi; cat -- "$0"'
+    const result = await this.#execRemote(['sh', '-c', script, path])
+    if (result.code === 3) return undefined
+    if (result.code !== 0) {
+      throw new CcwError(
+        'settings-invalid',
+        `could not read ${path} on ${this.#options.alias}: ${tail(result.stderr)}`,
+        { path, host: this.id },
+      )
+    }
+    return result.stdout
+  }
+
+  async writeTextAtomic(path: string, content: string, options: AtomicFileOptions = {}): Promise<void> {
+    const mode = (options.mode ?? 0o600).toString(8)
+    const script = `set -e
+target=$1
+mode=$2
+backup=$3
+dir=$(dirname -- "$target")
+mkdir -p -- "$dir"
+tmp=$(mktemp "$dir/.ccw-settings.XXXXXX")
+trap 'rm -f -- "$tmp"' EXIT
+cat > "$tmp"
+chmod "$mode" "$tmp"
+if [ "$backup" = "1" ] && [ -e "$target" ]; then cp -p -- "$target" "$target.bak"; fi
+mv -f -- "$tmp" "$target"
+trap - EXIT`
+    const child = await this.#transport.spawn(this.remoteArgv([
+      'sh', '-c', script, 'ccw-write', path, mode, options.backup === true ? '1' : '0',
+    ]))
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer | string) => {
+      stderr = tail(stderr + (Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk), 4000)
+    })
+    try {
+      child.stdin.write(content)
+      child.stdin.end()
+    } catch (error) {
+      child.kill('SIGKILL')
+      throw new CcwError(
+        'settings-write-failed',
+        `could not send settings to ${path} on ${this.#options.alias}: ${messageOf(error)}`,
+        { path, host: this.id },
+        { cause: error },
+      )
+    }
+    const exit = await child.exited
+    if (exit.code !== 0) {
+      throw new CcwError(
+        'settings-write-failed',
+        `could not write ${path} on ${this.#options.alias}: ${tail(stderr) || `remote writer exited ${exit.code}`}`,
+        { path, host: this.id },
+      )
+    }
+  }
+
+  async removeFile(path: string): Promise<void> {
+    const result = await this.#execRemote(['rm', '-f', '--', path])
+    if (result.code !== 0) {
+      throw new CcwError(
+        'settings-write-failed',
+        `could not remove ${path} on ${this.#options.alias}: ${tail(result.stderr)}`,
+        { path, host: this.id },
+      )
+    }
+  }
+
+  async home(): Promise<string> {
+    const result = await this.#execRemote(['sh', '-c', 'printf %s "${HOME:-}"'])
+    const home = result.stdout.trim()
+    if (result.code !== 0 || home.length === 0) {
+      throw new CcwError(
+        'host-probe-failed',
+        `could not determine the home directory of ${this.#options.alias}`,
+        { host: this.id },
+      )
+    }
+    return home
   }
 
   async probe(executable: string, args: readonly string[] = []): Promise<ProbeResult> {
@@ -168,4 +250,8 @@ function assertAlias(alias: string): void {
   if (alias.length === 0 || /[\s\x00-\x1f]/.test(alias)) {
     throw new CcwError('config-invalid', `SSH alias "${alias}" must be a single non-empty word`, { alias })
   }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

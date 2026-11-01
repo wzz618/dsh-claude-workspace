@@ -1,8 +1,19 @@
 import { spawn as spawnChild } from 'node:child_process'
-import { mkdir, realpath, stat } from 'node:fs/promises'
+import { mkdir, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { atomicWriteFile } from '../util/atomic.ts'
 import { scrubEnvironment } from '../util/env.ts'
 import { CcwError, tail } from '../util/errors.ts'
-import type { ExecOptions, ExecResult, HostOps, HostProcess, PathInfo, ProbeResult, SpawnOptions } from './types.ts'
+import type {
+  AtomicFileOptions,
+  ExecOptions,
+  ExecResult,
+  HostOps,
+  HostProcess,
+  PathInfo,
+  ProbeResult,
+  SpawnOptions,
+} from './types.ts'
 import { parseVersion } from './probe.ts'
 
 /** Executes Claude Code on the DSH host itself. */
@@ -45,6 +56,31 @@ export class LocalHost implements HostOps {
 
   async realpath(path: string): Promise<string> {
     return realpath(path)
+  }
+
+  async readText(path: string): Promise<string | undefined> {
+    try {
+      return await readFile(path, 'utf8')
+    } catch (error) {
+      if (isMissing(error)) return undefined
+      throw new CcwError('settings-invalid', `could not read ${path}: ${messageOf(error)}`, { path }, { cause: error })
+    }
+  }
+
+  async writeTextAtomic(path: string, content: string, options: AtomicFileOptions = {}): Promise<void> {
+    await atomicWriteFile(path, content, {
+      backup: options.backup === true,
+      mode: options.mode ?? 0o600,
+    })
+  }
+
+  async removeFile(path: string): Promise<void> {
+    await rm(path, { force: true })
+  }
+
+  async home(): Promise<string> {
+    const fromEnv = this.#env.HOME ?? process.env.HOME
+    return fromEnv !== undefined && fromEnv.length > 0 ? fromEnv : homedir()
   }
 
   async probe(executable: string, args: readonly string[] = []): Promise<ProbeResult> {

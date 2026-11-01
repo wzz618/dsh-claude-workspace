@@ -7,7 +7,8 @@
 //   2. adopt an existing remote directory as a workspace
 //   3. Write allowed once  -> remote file exists with the expected content
 //   4. Write rejected      -> remote file absent
-//   5. widen preview       -> refused for remote workspaces (P1 limitation)
+//   5. widen to Edit(sub/**) -> rule written to the remote settings file,
+//      then revoked; the original settings file is restored
 //
 // Required env:
 //   CCW_SSH_ALIAS   ~/.ssh/config alias of the remote host
@@ -17,7 +18,8 @@
 //   CCW_REMOTE_COMMAND  explicit remote command, e.g.
 //                       "cd /path && exec ./node_modules/.bin/claude-agent-acp"
 //
-// It creates and removes only ccw-e2e-ssh-*.txt in the remote directory.
+// It creates and removes only ccw-e2e-ssh-* files/directories in the remote
+// directory and restores `.claude/settings.local.json` it touched.
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { createService, type CcwService } from '../../src/service.ts'
@@ -64,13 +66,23 @@ function log(message: string): void {
 async function main(): Promise<void> {
   const allowFile = join(remoteCwd, 'ccw-e2e-ssh-allow.txt')
   const rejectFile = join(remoteCwd, 'ccw-e2e-ssh-reject.txt')
-  const widenFile = join(remoteCwd, 'ccw-e2e-ssh-widen.txt')
+  const widenDir = join(remoteCwd, 'ccw-e2e-ssh-sub')
+  const widenFile = join(widenDir, 'widen.txt')
+  const settingsFile = join(remoteCwd, '.claude', 'settings.local.json')
+  const settingsBackupFile = `${settingsFile}.bak`
   const dataDir = await makeTempDir('ccw-real-ssh-')
   let service: CcwService | undefined
+  let settingsBefore: string | undefined
+  let backupBefore: string | undefined
+  let widenDirExisted = false
   try {
     log(`alias=${alias} cwd=${remoteCwd} acp=${remoteAcp} command=${remoteCommand ?? '(default)'}`)
     const probe = await host.exec(['true'])
     assert.equal(probe.code, 0, `ssh ${alias} failed: ${probe.stderr.trim()}`)
+    settingsBefore = await host.readText(settingsFile)
+    backupBefore = await host.readText(settingsBackupFile)
+    widenDirExisted = (await host.exec(['test', '-d', widenDir])).code === 0
+    await host.mkdirp(widenDir)
 
     service = createService({
       config: {
@@ -145,27 +157,47 @@ async function main(): Promise<void> {
     assert.notEqual(rejected.code, 0, 'rejected write created the remote file')
     assert.ok(events.some((event) => event.type === 'tool-update' && event.card.status === 'failed'))
 
-    log('scenario: remote widen is refused in P1')
+    log('scenario: remote widen writes and revokes a rule')
     const widenPrompt = service.prompt({
       dshSessionId: 'remote-1',
-      text: 'Use the Write tool to create a file named ccw-e2e-ssh-widen.txt in the current directory containing exactly: widened. Do not use Bash.',
+      text: 'Use the Write tool to create a file named ccw-e2e-ssh-sub/widen.txt in the current directory containing exactly: widened. Do not use Bash.',
     })
     const widenPending = await waitFor(() => service!.pendingApprovals('remote-1')[0], 180_000)
-    await assert.rejects(
-      service.previewWiden(widenPending.requestId, 'prefix'),
-      /remote workspaces are not implemented yet/,
+    const preview = await service.previewWiden(widenPending.requestId, 'prefix')
+    log(`widen preview: ${JSON.stringify({ rules: preview.rules, file: preview.file })}`)
+    assert.deepEqual(preview.rules, ['Edit(ccw-e2e-ssh-sub/**)'])
+    assert.equal(preview.file, settingsFile)
+    const applied = await service.widenPermission({ requestId: widenPending.requestId, scope: 'prefix' })
+    assert.deepEqual(applied.rules, ['Edit(ccw-e2e-ssh-sub/**)'])
+    assert.equal(applied.forwarded, false)
+    const widenTurn = await widenPrompt
+    assert.equal(widenTurn.stopReason, 'end_turn')
+    assert.equal((await host.readText(widenFile))?.trim(), 'widened')
+    const settingsText = await host.readText(settingsFile)
+    assert.ok(
+      settingsText !== undefined && settingsText.includes('Edit(ccw-e2e-ssh-sub/**)'),
+      'rule was not written to the remote settings file',
     )
-    const rejectOption = findReject(widenPending.options)?.optionId
-    assert.ok(rejectOption)
-    await service.answerPermission(widenPending.requestId, rejectOption!)
-    await widenPrompt
-    const widened = await host.exec(['test', '-e', widenFile])
-    assert.notEqual(widened.code, 0, 'refused widen still created the remote file')
+    const writtenRule = (await service.writtenRules()).find((rule) => rule.rule === 'Edit(ccw-e2e-ssh-sub/**)')
+    assert.ok(writtenRule, 'written rule was not tracked')
+    assert.equal(writtenRule.host, 'target')
+    await service.revokeRule(writtenRule.id)
+    const afterRevoke = await host.readText(settingsFile)
+    assert.equal(afterRevoke?.includes('Edit(ccw-e2e-ssh-sub/**)'), false)
 
     log('PASS')
   } finally {
     await service?.close().catch(() => undefined)
     await host.exec(['rm', '-f', '--', allowFile, rejectFile, widenFile]).catch(() => undefined)
+    if (!widenDirExisted) await host.exec(['rm', '-rf', '--', widenDir]).catch(() => undefined)
+    if (settingsBefore === undefined) {
+      await host.removeFile(settingsFile).catch(() => undefined)
+      await host.removeFile(settingsBackupFile).catch(() => undefined)
+    } else {
+      await host.writeTextAtomic(settingsFile, settingsBefore, { mode: 0o600 }).catch(() => undefined)
+      if (backupBefore === undefined) await host.removeFile(settingsBackupFile).catch(() => undefined)
+      else await host.writeTextAtomic(settingsBackupFile, backupBefore, { mode: 0o600 }).catch(() => undefined)
+    }
     await removeTempDir(dataDir)
   }
 }
