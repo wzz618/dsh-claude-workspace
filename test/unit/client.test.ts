@@ -277,7 +277,7 @@ test('a persisted console binding offers resume after a Host restart', () => {
   assert.equal(needsResume('stopped', true, true), false)
 })
 
-const renderMarkdownNodes = client.renderMarkdownNodes as (text: string) => Array<{ type?: unknown; props?: { children?: unknown } }>
+const renderMarkdownNodes = client.renderMarkdownNodes as (text: string, keyPrefix?: string, truncatedLabel?: string) => Array<{ type?: unknown; props?: { children?: unknown } }>
 
 function flattenNodes(node: unknown): string {
   if (typeof node === 'string') return node
@@ -293,4 +293,31 @@ test('Markdown rendering keeps paragraph and table content', () => {
   assert.match(flattenNodes(nodes[0]), /当前目录 .*\/x.* 的内容/)
   assert.equal(nodes[1]!.type, 'table')
   assert.match(flattenNodes(nodes[1]), /\.claude\/.*目录/)
+})
+
+test('intraword underscores stay literal', () => {
+  assert.deepEqual(parseInline('foo_bar_baz'), [{ type: 'text', text: 'foo_bar_baz' }])
+  assert.deepEqual(parseInline('_em_'), [{ type: 'em', children: [{ type: 'text', text: 'em' }] }])
+})
+
+test('renderer truncates oversized Markdown instead of building unbounded nodes', () => {
+  const max = client.MAX_MARKDOWN_CHARS as number
+  const nodes = renderMarkdownNodes('a'.repeat(max + 1000), 'md', 'TRUNCATED')
+  const text = flattenNodes(nodes)
+  assert.ok(text.length <= max + 64)
+  assert.match(text, /TRUNCATED/)
+})
+
+test('a self-referencing tool card is not nested under itself', () => {
+  const tree = collectToolCards([
+    { type: 'tool-call', seq: 1, card: { toolCallId: 'self', title: 'Loop', parentToolCallId: 'self' } },
+    { type: 'tool-call', seq: 2, card: { toolCallId: 'child', title: 'Child', parentToolCallId: 'self' } },
+  ]) as ReturnType<typeof collectToolCards>
+  assert.deepEqual(tree.childrenByParent.get('self')!.map((card) => card.toolCallId), ['child'])
+})
+
+test('short GFM delimiter rows still start a table', () => {
+  const blocks = parseMarkdown('| a | b |\n|--|--|\n| 1 | 2 |')
+  assert.equal(blocks[0]!.type, 'table')
+  assert.deepEqual(blocks[0]!.rows, [['1', '2']])
 })

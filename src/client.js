@@ -118,6 +118,7 @@ window.__ModuleLoader__.load({
 			modeLabel: '模式',
 			toolLabel: '工具',
 			subagent: '子 agent',
+			markdownTruncated: '内容过长，已截断显示',
 			nativeSession: '新建 Claude 会话',
 			nativeOpened: '已在新会话中打开 Claude',
 			nativeCreated: '会话已创建',
@@ -210,6 +211,7 @@ window.__ModuleLoader__.load({
 			modeLabel: 'mode',
 			toolLabel: 'tool',
 			subagent: 'Subagent',
+			markdownTruncated: 'Content truncated',
 			nativeSession: 'New Claude session',
 			nativeOpened: 'Opened Claude in a new session',
 			nativeCreated: 'Session created',
@@ -299,7 +301,8 @@ window.__ModuleLoader__.load({
 			for (const event of events) {
 				const last = groups.length > 0 ? groups[groups.length - 1] : undefined
 				const isText = event.type === 'assistant-text' || event.type === 'thinking' || event.type === 'user-text'
-				if (isText && last !== undefined && last.type === event.type && last.replay === event.replay) {
+				if (isText && last !== undefined && last.type === event.type && last.replay === event.replay
+					&& typeof last.text === 'string' && typeof event.text === 'string') {
 					groups[groups.length - 1] = { ...last, text: last.text + event.text, seq: event.seq }
 				} else {
 					groups.push(event)
@@ -323,7 +326,7 @@ window.__ModuleLoader__.load({
 			for (const id of order) {
 				const card = cards.get(id)
 				const parent = card.parentToolCallId
-				if (parent === undefined || !cards.has(parent)) continue
+				if (parent === undefined || parent === id || !cards.has(parent)) continue
 				const children = childrenByParent.get(parent) ?? []
 				children.push(card)
 				childrenByParent.set(parent, children)
@@ -541,11 +544,14 @@ window.__ModuleLoader__.load({
 		}
 
 		function isTableSeparator(line) {
-			return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+			return /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line)
 		}
 
 		/** Inline Markdown tokens: code, strong, emphasis, strike, links. */
-		function parseInline(text) {
+		function parseInline(text, depth = 0) {
+			// Bound recursion: malformed or adversarial emphasis chains must not
+			// exhaust the render stack.
+			if (depth >= 12) return [{ type: 'text', text }]
 			const tokens = []
 			const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\n]+\*|_[^_\n]+_|\[[^\]]*\]\([^)]*\))/g
 			let last = 0
@@ -554,9 +560,18 @@ window.__ModuleLoader__.load({
 				if (match.index > last) tokens.push({ type: 'text', text: text.slice(last, match.index) })
 				const raw = match[0]
 				if (raw.startsWith('`')) tokens.push({ type: 'code', text: raw.slice(1, -1) })
-				else if (raw.startsWith('**') || raw.startsWith('__')) tokens.push({ type: 'strong', children: parseInline(raw.slice(2, -2)) })
-				else if (raw.startsWith('~~')) tokens.push({ type: 'strike', children: parseInline(raw.slice(2, -2)) })
-				else if (raw.startsWith('*') || raw.startsWith('_')) tokens.push({ type: 'em', children: parseInline(raw.slice(1, -1)) })
+				else if (raw.startsWith('**')) tokens.push({ type: 'strong', children: parseInline(raw.slice(2, -2), depth + 1) })
+				else if (raw.startsWith('__')) {
+					// GFM: intraword underscores are literal (foo__bar__baz).
+					if (intraword(text, match.index, raw.length)) tokens.push({ type: 'text', text: raw })
+					else tokens.push({ type: 'strong', children: parseInline(raw.slice(2, -2), depth + 1) })
+				}
+				else if (raw.startsWith('~~')) tokens.push({ type: 'strike', children: parseInline(raw.slice(2, -2), depth + 1) })
+				else if (raw.startsWith('*')) tokens.push({ type: 'em', children: parseInline(raw.slice(1, -1), depth + 1) })
+				else if (raw.startsWith('_')) {
+					if (intraword(text, match.index, raw.length)) tokens.push({ type: 'text', text: raw })
+					else tokens.push({ type: 'em', children: parseInline(raw.slice(1, -1), depth + 1) })
+				}
 				else {
 					const link = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(raw)
 					if (link !== null) tokens.push({ type: 'link', text: link[1], href: link[2] })
@@ -564,7 +579,26 @@ window.__ModuleLoader__.load({
 				last = match.index + raw.length
 			}
 			if (last < text.length) tokens.push({ type: 'text', text: text.slice(last) })
-			return tokens
+			return mergeTextTokens(tokens)
+		}
+
+		function intraword(text, index, length) {
+			const before = index > 0 ? text[index - 1] : ''
+			const after = index + length < text.length ? text[index + length] : ''
+			return /[A-Za-z0-9]/.test(before) && /[A-Za-z0-9]/.test(after)
+		}
+
+		function mergeTextTokens(tokens) {
+			const merged = []
+			for (const token of tokens) {
+				const last = merged.length > 0 ? merged[merged.length - 1] : undefined
+				if (token.type === 'text' && last !== undefined && last.type === 'text') {
+					merged[merged.length - 1] = { type: 'text', text: last.text + token.text }
+				} else {
+					merged.push(token)
+				}
+			}
+			return merged
 		}
 
 		/** Block-level Markdown: fences, headings, rules, quotes, tables, lists, paragraphs. */
@@ -685,9 +719,15 @@ window.__ModuleLoader__.load({
 			return nodes
 		}
 
+		const MAX_MARKDOWN_CHARS = 200_000
+
 		/** Render assistant Markdown without raw HTML; links are limited to http(s)/mailto. */
-		function renderMarkdownNodes(text, keyPrefix = 'md') {
-			return parseMarkdown(text).map((block, index) => {
+		function renderMarkdownNodes(text, keyPrefix = 'md', truncatedLabel = '') {
+			const source = typeof text === 'string' ? text : ''
+			const body = source.length > MAX_MARKDOWN_CHARS
+				? `${source.slice(0, MAX_MARKDOWN_CHARS)}\n\n${truncatedLabel}`
+				: source
+			return parseMarkdown(body).map((block, index) => {
 				const key = `${keyPrefix}-${index}`
 				switch (block.type) {
 					case 'code': return h('pre', { key, style: styles.mdPre, children: [
@@ -1238,8 +1278,10 @@ window.__ModuleLoader__.load({
 				const commands = latestCommands(events)
 				const commandMatches = matchCommands(commands, promptText)
 				const approvedByRule = autoApprovals(events)
-				const renderToolCard = (card, opacity) => {
-					const children = toolTree.childrenByParent.get(card.toolCallId) ?? []
+				const renderToolCard = (card, opacity, seen = new Set()) => {
+					if (seen.has(card.toolCallId)) return null
+					const nextSeen = new Set(seen).add(card.toolCallId)
+					const children = (toolTree.childrenByParent.get(card.toolCallId) ?? []).filter((child) => !nextSeen.has(child.toolCallId))
 					return h('details', {
 						key: `tool-${card.toolCallId}`,
 						open: card.status === 'running' || card.status === 'pending' || children.length > 0,
@@ -1257,10 +1299,10 @@ window.__ModuleLoader__.load({
 							toolInputSummary(card) ? h('code', { style: { ...styles.code, ...styles.muted }, children: toolInputSummary(card) }) : null,
 							...(card.diffs || []).map((diff, index) => h(DiffView, { key: `d${index}`, diff, t })),
 							...(card.content || [])
-								.filter((entry) => entry.type === 'content' && entry.content && entry.content.type === 'text')
+								.filter((entry) => entry.type === 'content' && entry.content && entry.content.type === 'text' && typeof entry.content.text === 'string')
 								.map((entry, index) => h('div', { key: `c${index}`, style: { ...styles.code, ...styles.muted }, children: entry.content.text })),
 							children.length > 0
-								? h('div', { style: styles.subagentTree, children: children.map((child) => renderToolCard(child, {})) })
+								? h('div', { style: styles.subagentTree, children: children.map((child) => renderToolCard(child, {}, nextSeen)) })
 								: null,
 						].filter(Boolean),
 					})
@@ -1276,14 +1318,15 @@ window.__ModuleLoader__.load({
 						] }))
 					}
 					const opacity = item.replay ? { opacity: 0.72 } : {}
+					const eventText = typeof item.text === 'string' ? item.text : ''
 					if (item.type === 'assistant-text') {
-						streamNodes.push(h('div', { key: `a-${item.seq}`, style: { ...styles.messageMd, ...opacity }, children: renderMarkdownNodes(item.text) }))
+						streamNodes.push(h('div', { key: `a-${item.seq}`, style: { ...styles.messageMd, ...opacity }, children: renderMarkdownNodes(eventText, 'md', t('markdownTruncated')) }))
 					} else if (item.type === 'user-text') {
-						streamNodes.push(h('div', { key: `u-${item.seq}`, style: { ...styles.messageUser, ...opacity }, children: item.text }))
+						streamNodes.push(h('div', { key: `u-${item.seq}`, style: { ...styles.messageUser, ...opacity }, children: eventText }))
 					} else if (item.type === 'thinking') {
 						streamNodes.push(h('details', { key: `t-${item.seq}`, style: { ...styles.thinking, ...opacity }, children: [
 							h('summary', { children: t('thinking') }),
-							h('div', { style: styles.message, children: item.text }),
+							h('div', { style: styles.message, children: eventText }),
 						] }))
 					} else if (item.type === 'tool-call' || item.type === 'tool-update') {
 						const card = toolTree.cards.get(item.card.toolCallId) ?? item.card
@@ -1335,17 +1378,19 @@ window.__ModuleLoader__.load({
 
 				const dockNodes = pending.map((request) => {
 					const preview = previews[request.requestId]
+					const dockTool = request.toolCall || {}
+					const options = Array.isArray(request.options) ? request.options : []
 					return h('div', { key: request.requestId, style: styles.dockCard, children: [
 						h('div', { style: styles.row, children: [
-							h(Badge, { children: request.toolCall.kind || t('toolLabel') }),
-							h('span', { style: { flex: '1 1 auto', fontWeight: 600 }, children: request.toolCall.title || request.toolCall.toolCallId }),
+							h(Badge, { children: dockTool.kind || t('toolLabel') }),
+							h('span', { style: { flex: '1 1 auto', fontWeight: 600 }, children: dockTool.title || dockTool.toolCallId || request.requestId }),
 							h('span', { style: styles.muted, children: request.sessionId }),
 						] }),
-						toolInputSummary(request.toolCall) ? h('code', { style: styles.code, children: toolInputSummary(request.toolCall) }) : null,
+						toolInputSummary(dockTool) ? h('code', { style: styles.code, children: toolInputSummary(dockTool) }) : null,
 						h('div', { style: styles.panelRow, children: [
-							...request.options.map((option) => h('button', {
+							...options.map((option) => h('button', {
 								key: option.optionId,
-								style: option.kind && option.kind.indexOf('reject') === 0 ? styles.danger : styles.primary,
+								style: typeof option.kind === 'string' && option.kind.indexOf('reject') === 0 ? styles.danger : styles.primary,
 								onClick: () => void answer(request.requestId, option.optionId),
 								children: option.name || option.optionId,
 							})),
@@ -1371,9 +1416,9 @@ window.__ModuleLoader__.load({
 						h('span', { style: styles.cardTitle, children: t('planTitle') }),
 						plan.decision ? h(Badge, { children: plan.decision.kind }) : null,
 					].filter(Boolean) }),
-					...plan.entries.map((entry, index) => h('div', { key: `pe${index}`, style: styles.row, children: [
-						h(Badge, { children: entry.status }),
-						h('span', { children: entry.content }),
+					...(Array.isArray(plan.entries) ? plan.entries : []).map((entry, index) => h('div', { key: `pe${index}`, style: styles.row, children: [
+						h(Badge, { children: (entry && entry.status) || '' }),
+						h('span', { children: (entry && entry.content) || '' }),
 					] })),
 					plan.decision ? null : h(Fragment, { children: [
 						h('textarea', {
@@ -1654,6 +1699,7 @@ window.__ModuleLoader__.load({
 		exports.collectToolCards = collectToolCards
 		exports.needsResume = needsResume
 		exports.renderMarkdownNodes = renderMarkdownNodes
+		exports.MAX_MARKDOWN_CHARS = MAX_MARKDOWN_CHARS
 		exports.parseMarkdown = parseMarkdown
 		exports.parseInline = parseInline
 		exports.splitTableRow = splitTableRow
