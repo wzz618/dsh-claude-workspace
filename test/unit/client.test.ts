@@ -266,3 +266,13 @@ test('table rows split without the framing pipes', () => {
   assert.deepEqual(splitTableRow('| a | b |'), ['a', 'b'])
   assert.deepEqual(splitTableRow('a|b'), ['a', 'b'])
 })
+
+const needsResume = client.needsResume as (runtime: string, running: boolean, bound: boolean) => boolean
+
+test('a persisted console binding offers resume after a Host restart', () => {
+  assert.equal(needsResume('stopped', false, true), true)
+  assert.equal(needsResume('disconnected', false, true), true)
+  assert.equal(needsResume('stopped', false, false), false)
+  assert.equal(needsResume('ready', false, true), false)
+  assert.equal(needsResume('stopped', true, true), false)
+})

@@ -342,6 +342,11 @@ window.__ModuleLoader__.load({
 			return values
 		}
 
+		/** Whether a persisted binding can be resumed in this Host process. */
+		function needsResume(runtime, running, bound) {
+			return running !== true && bound === true && (runtime === 'disconnected' || runtime === 'stopped')
+		}
+
 		/** One-line argument summary for a tool card or permission request. */
 		function toolInputSummary(toolCall) {
 			if (toolCall === null || toolCall === undefined) return ''
@@ -1224,6 +1229,8 @@ window.__ModuleLoader__.load({
 				// SSH workspaces are supported too; the Host reports a missing
 				// probeCwd as an actionable error when the button is used.
 				const canCreateNative = Boolean(native && native.available)
+				const boundSession = bindings.find((binding) => binding.dshSessionId === sessionId)
+				const showResume = needsResume(runtime, running, boundSession !== undefined)
 				const groups = groupEvents(events)
 				const toolTree = collectToolCards(events)
 				const renderedTools = new Set()
@@ -1389,7 +1396,7 @@ window.__ModuleLoader__.load({
 							h('span', { children: stateLabel }),
 							h('span', { style: { ...styles.muted, flex: '1 1 auto' }, children: sessionId || '' }),
 							running ? h('button', { style: styles.danger, onClick: () => void stop(), children: t('stop') }) : null,
-							runtime === 'disconnected'
+							showResume
 								? h('button', {
 									style: styles.primary,
 									disabled: reconnecting,
@@ -1644,6 +1651,7 @@ window.__ModuleLoader__.load({
 		exports.mergeEvents = mergeEvents
 		exports.groupEvents = groupEvents
 		exports.collectToolCards = collectToolCards
+		exports.needsResume = needsResume
 		exports.parseMarkdown = parseMarkdown
 		exports.parseInline = parseInline
 		exports.splitTableRow = splitTableRow
