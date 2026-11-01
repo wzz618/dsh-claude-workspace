@@ -1,4 +1,4 @@
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
 /** Directory-derivation policy for a workspace's Claude Code cwd. */
@@ -23,6 +23,8 @@ export interface HostConfig {
   readonly command?: string
   readonly env: Readonly<Record<string, string>>
   readonly connectTimeoutMs: number
+  /** Remote absolute directory used for the model-catalog probe session. */
+  readonly probeCwd?: string
 }
 
 /** Fully resolved plugin configuration; every deployment choice is explicit. */
@@ -96,8 +98,14 @@ export interface ResolvedConfig {
     readonly attachToWorkspace: boolean
     /** ACP adapter agent table; the local host is offered here when seeding is on. */
     readonly agentsFile: string
-    /** Add the local host's agent entry when the file has no such id. */
+    /** Add one agent entry per configured host when the file has no such id. */
     readonly seedAgentsFile: boolean
+    /** Existing local directory used as the spawn cwd of remote launchers. */
+    readonly remoteSpawnCwd: string
+    /** Executable used to reach SSH hosts (default `ssh`). */
+    readonly sshCommand: string
+    /** Per-session remote cwd table read by the adapter for SSH workspaces. */
+    readonly cwdMapFile: string
   }
 }
 
@@ -161,6 +169,9 @@ export interface CcwConfigInput {
     attachToWorkspace?: boolean
     agentsFile?: string
     seedAgentsFile?: boolean
+    remoteSpawnCwd?: string
+    sshCommand?: string
+    cwdMapFile?: string
   }
 }
 
@@ -173,6 +184,7 @@ export interface HostConfigInput {
   command?: string
   env?: Record<string, string>
   connectTimeoutMs?: number
+  probeCwd?: string
 }
 
 /** A configuration rejection that names every invalid field at once. */
@@ -285,7 +297,7 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
   }
   if (logsConfig.files > 10) issues.push('logs.files must be 10 or fewer')
 
-  const nativeRaw = section(raw.native, ['provider', 'model', 'permissionPreset', 'attachToWorkspace', 'agentsFile', 'seedAgentsFile'], 'native', issues)
+  const nativeRaw = section(raw.native, ['provider', 'model', 'permissionPreset', 'attachToWorkspace', 'agentsFile', 'seedAgentsFile', 'remoteSpawnCwd', 'sshCommand', 'cwdMapFile'], 'native', issues)
   const nativeConfig = {
     provider: stringField(nativeRaw.provider, 'acp-claude-code', 'native.provider', issues),
     model: stringField(nativeRaw.model, 'default', 'native.model', issues),
@@ -293,6 +305,9 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
     attachToWorkspace: booleanField(nativeRaw.attachToWorkspace, true, 'native.attachToWorkspace', issues),
     agentsFile: pathField(nativeRaw.agentsFile, join(home, 'dsh-acp', 'agents.json'), 'native.agentsFile', env, issues),
     seedAgentsFile: booleanField(nativeRaw.seedAgentsFile, true, 'native.seedAgentsFile', issues),
+    remoteSpawnCwd: pathField(nativeRaw.remoteSpawnCwd, tmpdir(), 'native.remoteSpawnCwd', env, issues),
+    sshCommand: stringField(nativeRaw.sshCommand, 'ssh', 'native.sshCommand', issues),
+    cwdMapFile: pathField(nativeRaw.cwdMapFile, join(home, 'dsh-acp', 'native-cwd.json'), 'native.cwdMapFile', env, issues),
   }
 
   if (issues.length > 0) throw new CcwConfigError(issues)
@@ -345,7 +360,7 @@ function resolveHost(
     issues.push(`hosts.${id} must be an object`)
     return null
   }
-  rejectUnknownKeys(value, ['kind', 'alias', 'executable', 'args', 'command', 'env', 'connectTimeoutMs'], `hosts.${id}`, issues)
+  rejectUnknownKeys(value, ['kind', 'alias', 'executable', 'args', 'command', 'env', 'connectTimeoutMs', 'probeCwd'], `hosts.${id}`, issues)
   const kind = value.kind === undefined ? 'local' : value.kind
   if (kind !== 'local' && kind !== 'ssh') {
     issues.push(`hosts.${id}.kind must be "local" or "ssh"`)
@@ -361,6 +376,11 @@ function resolveHost(
     issues.push(`hosts.${id}: command and args cannot both be set; command replaces the executable and its arguments`)
   }
   const hostEnv = value.env === undefined ? {} : isRecord(value.env) && Object.values(value.env).every((entry) => typeof entry === 'string') ? value.env as Record<string, string> : (issues.push(`hosts.${id}.env must map strings to strings`), {})
+  const probeCwd = optionalString(value.probeCwd, `hosts.${id}.probeCwd`, issues)
+  if (probeCwd !== undefined) {
+    if (kind !== 'ssh') issues.push(`hosts.${id}.probeCwd is only valid for ssh hosts`)
+    else if (!probeCwd.startsWith('/')) issues.push(`hosts.${id}.probeCwd must be an absolute POSIX path`)
+  }
   return {
     kind,
     ...(kind === 'ssh' ? { alias: alias ?? id } : {}),
@@ -369,6 +389,7 @@ function resolveHost(
     ...(command === undefined ? {} : { command }),
     env: hostEnv,
     connectTimeoutMs: numberField(value.connectTimeoutMs, defaultConnectTimeoutMs, `hosts.${id}.connectTimeoutMs`, issues, 1),
+    ...(probeCwd === undefined || kind !== 'ssh' ? {} : { probeCwd }),
   }
 }
 

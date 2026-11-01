@@ -22,6 +22,9 @@ test('defaults resolve to a local host and a data directory under DSH_HOME', () 
     attachToWorkspace: true,
     agentsFile: '/tmp/dsh-home/dsh-acp/agents.json',
     seedAgentsFile: true,
+    remoteSpawnCwd: '/tmp',
+    sshCommand: 'ssh',
+    cwdMapFile: '/tmp/dsh-home/dsh-acp/native-cwd.json',
   })
 })
 
@@ -33,6 +36,8 @@ test('native entry configuration is validated', () => {
   assert.equal(config.native.attachToWorkspace, false)
   assert.equal(config.native.agentsFile.endsWith('/dsh-acp/agents.json'), true)
   assert.equal(config.native.seedAgentsFile, true)
+  assert.equal(config.native.remoteSpawnCwd.endsWith('/tmp'), true)
+  assert.equal(config.native.sshCommand, 'ssh')
   assert.throws(() => resolveConfig({ native: { bogus: true } as never }), /native.bogus/)
   assert.throws(() => resolveConfig({ native: { attachToWorkspace: 'yes' as never } }), /native.attachToWorkspace/)
 })

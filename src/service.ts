@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, posix } from 'node:path'
 import type {
@@ -25,9 +26,12 @@ import { createHostOps } from './host/index.ts'
 import type { DirectoryEntry, HostOps } from './host/types.ts'
 import type { AgentSeedResult } from './native/agents-file.ts'
 import { NativeSessionBridge, type NativeSessionResult, type ServiceLookup } from './native/bridge.ts'
+import { removeRemoteCwd, writeRemoteCwd } from './native/cwd-map.ts'
+import { nativeProviderForHost } from './native/routing.ts'
 import { CcwError, tail } from './util/errors.ts'
 import {
   createWorkspace,
+  dshWorkspacePath,
   deleteWorkspaceDirectory,
   deriveSessionDirectory,
   ensureSessionDirectory,
@@ -262,10 +266,10 @@ export class CcwService {
     if (workspace === undefined || workspace.state !== 'active') {
       throw new CcwError('workspace-not-found', `workspace ${workspaceId} is not active`, { workspaceId })
     }
-    if (workspace.host.kind !== 'local') {
+    if (workspace.host.kind === 'ssh' && this.#config.hosts[workspace.hostId]?.probeCwd === undefined) {
       throw new CcwError(
-        'host-unsupported',
-        `native Claude sessions run on the DSH host only; workspace ${workspace.title} runs on ${workspace.host.alias}. Use the Claude console for remote workspaces.`,
+        'config-invalid',
+        `hosts.${workspace.hostId}.probeCwd is required for native Claude sessions: set it to an absolute directory on the remote host (usually the project with its .claude settings)`,
         { workspaceId, hostId: workspace.hostId },
       )
     }
@@ -277,14 +281,41 @@ export class CcwService {
       )
     }
     const dshWorkspaceId = await this.#ensureDshWorkspaceId(workspaceId)
-    return this.#native.create({ cwd: workspace.dir, ...(dshWorkspaceId === undefined ? {} : { dshWorkspaceId }) })
+    const provider = nativeProviderForHost(this.#config, workspace.hostId)
+    if (workspace.host.kind === 'local') {
+      return this.#native.create({
+        cwd: workspace.dir,
+        provider,
+        ...(dshWorkspaceId === undefined ? {} : { dshWorkspaceId }),
+      })
+    }
+    // SSH sessions keep the local placeholder as their DSH cwd (workspace
+    // attachment validates that equality); the adapter reads the remote path
+    // from this map before the first turn.
+    const placeholder = dshWorkspacePath(this.#config, workspace.id, workspace.host, workspace.dir)
+    await mkdir(placeholder, { recursive: true, mode: 0o700 })
+    const sessionId = `session-${randomUUID()}`
+    writeRemoteCwd(this.#config.native.cwdMapFile, sessionId, workspace.dir)
+    try {
+      return await this.#native.create({
+        cwd: placeholder,
+        provider,
+        sessionId,
+        ...(dshWorkspaceId === undefined ? {} : { dshWorkspaceId }),
+      })
+    } catch (error) {
+      removeRemoteCwd(this.#config.native.cwdMapFile, sessionId)
+      throw error
+    }
   }
 
   async #ensureDshWorkspaceId(workspaceId: string): Promise<string | undefined> {
     const workspace = await this.#workspaces.get(workspaceId)
     if (workspace?.dshWorkspaceId !== undefined) return workspace.dshWorkspaceId
     if (workspace === undefined || !this.#registry.available) return undefined
-    const registration = await this.#registry.register({ path: workspace.dir, title: workspace.title })
+    const path = dshWorkspacePath(this.#config, workspaceId, workspace.host, workspace.dir)
+    if (workspace.host.kind === 'ssh') await mkdir(path, { recursive: true, mode: 0o700 }).catch(() => undefined)
+    const registration = await this.#registry.register({ path, title: workspace.title })
     if (registration === undefined) return undefined
     await this.#workspaces.update(workspaceId, { dshWorkspaceId: registration.id })
     return registration.id
@@ -306,7 +337,9 @@ export class CcwService {
     for (const workspace of await this.#workspaces.listActive()) {
       if (workspace.dshWorkspaceId !== undefined) continue
       try {
-        const registration = await this.#registry.register({ path: workspace.dir, title: workspace.title })
+        const path = dshWorkspacePath(this.#config, workspace.id, workspace.host, workspace.dir)
+        if (workspace.host.kind === 'ssh') await mkdir(path, { recursive: true, mode: 0o700 }).catch(() => undefined)
+        const registration = await this.#registry.register({ path, title: workspace.title })
         if (registration !== undefined) {
           await this.#workspaces.update(workspace.id, { dshWorkspaceId: registration.id })
         }

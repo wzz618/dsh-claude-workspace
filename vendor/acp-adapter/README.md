@@ -71,7 +71,12 @@ patch 包含：
 12. **路由窥测**：`persistence.inspect()` 换为只读 `open(id, 'read')` + `read`，
     `persistence.list()` 按 0.2 的 snapshot 结构读取 `header.id`
 13. **事件词表**：不再落 0.2 已不存在的 `assistant/chunk`；助手内容在段收口时
-    以单条 `assistant/message`（`stream: []`）提交
+    以单条 `assistant/message`（`stream: []`）提交；assistant block 的 tool-call
+    名与 `tool/call` 一致（`dsh_acp_external_tool`），否则 session query 判日志损坏
+14. **远程启动语义**：profile 新增 `spawnCwd`（本机 spawn 目录）、`cwdToken`
+    （args 中替换为 shell-quoted 会话 cwd）、`probeCwd`（远端模型探测目录）、
+    `cwdMapFile`（按 DSH sessionId 读取远端 cwd）；远端 cwd 跳过本机 realpath，
+    探针的进程 cwd 仍在本机而 `session/new` 使用 `probeCwd`
 
 ## 原生入口与恢复
 
@@ -85,9 +90,17 @@ CCW 的 `POST /sessions/native-create` 用 `native.provider`（默认
 会话只在生命周期关闭或 checkpoint flush 时物化；进程被 SIGKILL 时未 flush 的
 尾部仍可能丢失（与原生 loop 相同）。
 
+## SSH 原生入口
+
+CCW 会为每台 SSH host 自动写入 `ssh` 启动器；远端目录由 `native.cwdMapFile`
+按 session 提供，DSH 会话使用本地占位目录。已验证：远端执行 `pwd; hostname; ls`
+返回远端机器与项目路径，DSH 重启后同一会话可继续。要求 host 配置
+`probeCwd`（远端项目目录，通常含 `.claude` 配置）。
+
 ## 已知限制（P2b 待办）
 
-- 不是 CCW 工作区/主机模型：原生会话使用 `agents.json` 的静态 profile，且只支持本地工作区。
+- 原生会话使用 `agents.json` 的静态 profile；远程目录经 `cwdMapFile` 动态映射。
+- 远端 ACP 进程不受 DSH 沙箱约束；DSH 的权限预设只约束本机启动器。
 - 无 token 级流式显示：0.2 没有 `assistant/chunk`，助手文本在段结束时一次性出现。
 - 权限选项未保真：Full access 下自动 `allow-once`，`allow-with-updates`
   需接回 CCW 权限 Dock。

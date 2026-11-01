@@ -52,10 +52,14 @@ export interface NativeSessionResult {
 
 /** How the native entry resolves one workspace to a Session. */
 export interface NativeSessionInput {
-  /** Absolute Claude working directory. */
+  /** Absolute Claude working directory (remote path for SSH workspaces). */
   readonly cwd: string
   /** DSH workspace id; the Session is attached to it before it is returned. */
   readonly dshWorkspaceId?: string
+  /** Adapter provider route for the workspace's host; defaults to `native.provider`. */
+  readonly provider?: string
+  /** Pre-minted Session identity, so callers can persist routing before creation. */
+  readonly sessionId?: string
 }
 
 /** Creates DSH-native Claude Sessions through the ACP route. */
@@ -91,7 +95,7 @@ export class NativeSessionBridge {
    * configured permission preset in that order. A failure after creation
    * reports the created Session identity so the caller can still open it.
    *
-   * @param input - Working directory and optional DSH workspace id.
+   * @param input - Working directory, provider route, and optional DSH workspace id.
    * @returns the created Session identity and non-fatal warnings.
    * @throws {CcwError} `native-unavailable` without the Agent service,
    * `workspace-registration-failed` when attachment is required but impossible,
@@ -116,8 +120,9 @@ export class NativeSessionBridge {
       )
     }
 
-    const sessionId = this.#newSessionId()
-    const created = await this.#createAgent(agents, sessionId, input.cwd)
+    const sessionId = input.sessionId ?? this.#newSessionId()
+    const provider = input.provider ?? this.#config.provider
+    const created = await this.#createAgent(agents, sessionId, input.cwd, provider)
     const warnings: string[] = []
 
     let workspaceAttached = false
@@ -173,19 +178,20 @@ export class NativeSessionBridge {
     agents: NativeAgents,
     sessionId: string,
     cwd: string,
+    provider: string,
   ): Promise<{ readonly agent: { readonly id: string; readonly session: unknown } }> {
     try {
       return await agents.create({
         sessionId,
         meta: { cwd },
-        agentOptions: { provider: this.#config.provider, model: this.#config.model },
+        agentOptions: { provider, model: this.#config.model },
       })
     } catch (error) {
       throw new CcwError(
         'native-session-failed',
-        `DSH could not create a native session on provider "${this.#config.provider}": ${messageOf(error)}. `
+        `DSH could not create a native session on provider "${provider}": ${messageOf(error)}. `
           + 'Install the ACP adapter and its Claude Code profile, or use the Claude console for this workspace.',
-        { cwd, provider: this.#config.provider, model: this.#config.model },
+        { cwd, provider, model: this.#config.model },
         { cause: error },
       )
     }

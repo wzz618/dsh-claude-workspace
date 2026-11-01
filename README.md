@@ -9,11 +9,13 @@
 | 入口 | 走哪里 | 适合 |
 |---|---|---|
 | 右侧栏 `Claude Code` 控制台 | 本插件自己的 ACP 客户端（`CcwService`），本地或 SSH | 远程主机、权限 Dock、放宽规则、审计 |
-| 原生会话（`新建 Claude 会话`） | `@zaimokuza/dsh-acp-adapter` fork，DSH 自己的会话 UI | 本地、原生消息流/工具卡/Trajectory、与普通 DSH 会话并列 |
+| 原生会话（`新建 Claude 会话`） | `@zaimokuza/dsh-acp-adapter` fork，DSH 自己的会话 UI | 本地或 SSH、原生消息流/工具卡/Trajectory、与普通 DSH 会话并列 |
 
 原生入口在 Web UI 右侧栏 `Claude Code` 标签里，选中工作区后点 **新建 Claude 会话**：插件会用 `acp-claude-code` provider 创建一个 DSH 会话、挂到该工作区、写入配置的权限预设（默认 Full access，Claude 自己继续负责权限问答），然后直接用 `uiWorkspace.openSession()` 打开。DSH 默认模型仍然是 `opencode-go`；只有这个入口（或手动选择 `Claude Code · ACP`）才走 Claude。
 
-原生入口目前只支持本地工作区：ACP 子进程由适配器在本机 spawn，SSH 工作区请使用控制台。
+SSH 工作区的原生入口由本机 `ssh` 启动远端 `claude-agent-acp`：插件把远端目录写进
+`native.cwdMapFile`，适配器在会话启动时用该目录 `cd` 并作为 ACP `session/new` 的 cwd；
+DSH 侧会话仍使用本地占位目录，因此工作区归属、侧栏与重启恢复都按普通会话处理。
 
 ## 它做什么
 
@@ -69,8 +71,23 @@ dsh plugin --profile web add /opt/dsh-acp-adapter
 ```
 
 `GET /api/dsh-claude-workspace/status` 的 `native.seed` 会报告
-`created` / `present` / `skipped` / `failed` 及原因。关闭自动写入：
+`created` / `updated` / `present` / `skipped` / `failed` / `partial` 及原因
+（`managedBy` 标记的条目会随配置刷新，手工条目不会被覆盖）。关闭自动写入：
 `native.seedAgentsFile: false`，然后手工维护 `agents.json`。
+
+SSH 主机还需要 `probeCwd`（远端绝对目录，通常是带 `.claude` 配置的项目根），
+用于模型目录探测；每台 SSH 主机会自动得到一个 `acp-claude-code-<host>` provider：
+
+```yaml
+hosts:
+  devbox:
+    kind: ssh
+    alias: ubuntu@192.0.2.10
+    executable: /home/ubuntu/.ccw-acp/node_modules/.bin/claude-agent-acp
+    args: []
+    probeCwd: /home/ubuntu/project
+    connectTimeoutMs: 15000
+```
 
 安装后重启 DSH，右侧栏控制台选中本地工作区时会出现 **新建 Claude 会话**。没有安装适配器时该按钮会把创建失败的原因显示在控制台里。
 
@@ -134,7 +151,9 @@ dsh plugin --profile web add /opt/dsh-acp-adapter
           permissionPreset: danger-full-access
           attachToWorkspace: true     # 挂到对应 DSH 工作区，侧栏可见
           agentsFile: '${DSH_HOME}/dsh-acp/agents.json'
-          seedAgentsFile: true        # 用本地 host 配置补齐 agents.json
+          seedAgentsFile: true        # 用 host 配置补齐 agents.json
+          remoteSpawnCwd: /tmp        # ssh 启动器的本机 spawn cwd
+          cwdMapFile: '${DSH_HOME}/dsh-acp/native-cwd.json'
 ```
 
 配置是严格的：未知字段、越界数值、非绝对路径、未声明的 `defaultHost`、`forwardClaudeOptions: false` 都会在加载时报错并列出全部问题。

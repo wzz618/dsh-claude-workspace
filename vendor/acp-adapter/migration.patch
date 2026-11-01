@@ -95,10 +95,13 @@ diff -ruN a/lib/domain/policy/permissions.js b/lib/domain/policy/permissions.js
                  });
 diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
 --- a/lib/domain/session/agent.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/domain/session/agent.js	2026-11-01 20:11:23.839774152 +0800
-@@ -20,8 +20,10 @@
++++ b/lib/domain/session/agent.js	2026-11-01 22:15:51.056745400 +0800
+@@ -18,10 +18,12 @@
+  * @module @zaimokuza/dsh-acp-adapter/domain/session/agent
+  */
  /// <reference types="node" />
- import { realpathSync } from 'node:fs';
+-import { realpathSync } from 'node:fs';
++import { readFileSync, realpathSync } from 'node:fs';
  import process from 'node:process';
 -import { Inbox, agentEvents } from '@deepseek-ai/dsh-agent';
 -import { assertNever, createUserMessage, errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
@@ -109,7 +112,37 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
  import { canonicalHeader, foldRequestHeader, headerEquals } from '@deepseek-ai/dsh-session';
  import { AcpClientConnection, supportsFork } from "../../protocol/v1/connection.js";
  import { AcpClientError, acpErrorRef } from "../../protocol/v1/errors.js";
-@@ -279,7 +281,7 @@
+@@ -36,6 +38,29 @@
+ import { ACP_DEGRADATION_AUDIT_KIND, ACP_SESSION_FORK_AUDIT_KIND } from "../policy/events.js";
+ import { ACP_STEP, ACP_UNKNOWN_MODEL, ReplayTranslator, TurnTranslator, sessionEventSink } from "../../protocol/v1/translate.js";
+ import { descriptorOf } from "./agent-config.js";
++/** POSIX single-quote one word for a remote shell command line. */
++function posixQuote(value) {
++    return `'${value.replaceAll("'", "'\\''")}'`;
++}
++/**
++ * Remote cwd recorded by the workspace manager for one DSH session. The map is
++ * read per session start so new workspaces need no registry reload.
++ * @param {object} config - Validated agent profile.
++ * @param {string} sessionId - DSH session identity.
++ * @returns {string | undefined} absolute remote path when mapped.
++ */
++function mappedRemoteCwd(config, sessionId) {
++    if (config.cwdMapFile === undefined)
++        return undefined;
++    try {
++        const document = JSON.parse(readFileSync(config.cwdMapFile, 'utf8'));
++        const value = document?.sessions?.[sessionId];
++        return typeof value === 'string' && value.startsWith('/') ? value : undefined;
++    }
++    catch {
++        return undefined;
++    }
++}
+ import { acpLaunchEnvironment, acpLaunchFingerprint } from "./launch-fingerprint.js";
+ import { AcpBindingPersistError, AcpReconciliationError, ACP_RECONCILIATION_GUIDANCE, acpModelDivergenceNote, appendEmptyResponseNote, appendForkBlankNote, appendModelDivergenceNote, appendOutcomeUnknownNote, appendRebindBlankNote, appendResumeResidueNote, detectInterruptedTail, expectedVisibleHistory, hasForkBlankNote, isLatestSemanticForkSeed, reconcileVisibleHistory, replayVisibleHistory, resolveExpectedRange, } from "./resume.js";
+ import { acpCanonicalHash16, acpOptionsSnapshotOf } from "../../persistence/sidecar.js";
+@@ -279,7 +304,7 @@
              discarded: (message) => { this.dispatch.emit('agent/inbox/discarded', { message }); },
              claimed: (message, turn) => { this.dispatch.emit('agent/inbox/claimed', { message, turn }); },
          });
@@ -118,7 +151,7 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
          this.phase = { kind: 'idle', lastTurn };
          // 对账基线：必须在任何本 run 自己的说明消息落盘**之前**捕获（
          // resolveExpectedRange 的区间扩展上界；说明消息省略 sourceEventSeqs 本就不算
-@@ -302,7 +304,7 @@
+@@ -302,7 +327,7 @@
          // reconciliation 记录不在此落盘（构造期不能 await，fire-and-forget 无持久化
          // 保证）——首个被拒的 turn 经 blockError await 落盘（见 turn 闩锁分支）；
          // 从未 prompt 的 blocked 会话由 health/liveSessions 的 continuity 如实披露。
@@ -127,7 +160,70 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
          const presetBlocked = driver.presetBlocked
              ?? (driver.resumeBinding === undefined && session.header.parentSession === undefined
                  ? historicalProvider === this.providerRoute
-@@ -1436,7 +1438,7 @@
+@@ -1317,7 +1342,16 @@
+      */
+     async startSession(signal, commitBinding) {
+         const { profile } = this.driver;
+-        const argv = [profile.config.command, ...profile.config.args];
++        const localCwd = this.session.header.cwd ?? process.cwd();
++        // A remote workspace keeps a local placeholder DSH cwd; the ACP session
++        // and launcher use the remote path recorded for this session.
++        const remoteCwd = mappedRemoteCwd(profile.config, this.id);
++        const sessionCwd = remoteCwd ?? localCwd;
++        // Remote profiles substitute the ACP session cwd into their launcher
++        // args as a shell-quoted word (for example inside an ssh command).
++        const argv = [profile.config.command, ...profile.config.args].map((arg) => profile.config.cwdToken === undefined
++            ? arg
++            : arg.split(profile.config.cwdToken).join(posixQuote(sessionCwd)));
+         // fail closed：subprocess seam 缺席（宿主 composition 缺 subprocess-local
+         // provider）时首个 turn 响亮失败——零 spawn、零目录副作用（先于 buildAcpSpawnPlan
+         // 的 fs 副作用检查），native 路由不经过本路径。
+@@ -1360,10 +1394,10 @@
+         if (plan.confined === null)
+             this.warnUnconfinedSpawn();
+         await this.notePermissionScope(plan);
+-        const sessionCwd = this.session.header.cwd ?? process.cwd();
+         const spec = {
+             argv,
+             cwd: sessionCwd,
++            ...(profile.config.spawnCwd === undefined ? {} : { spawnCwd: profile.config.spawnCwd }),
+             env,
+             spawnPlan: plan,
+             subprocess: subprocess.seam,
+@@ -1415,17 +1449,24 @@
+             }
+             let established;
+             let forkBlankReason;
+-            // canonical cwd 一次计算，预检比对与 binding 落盘共用
+-            const cwd = this.session.header.cwd ?? process.cwd();
++            // canonical cwd 一次计算，预检比对与 binding 落盘共用。
++            // Remote profiles spawn a local launcher; their session cwd is a
++            // remote path that cannot be realpath'd on this host.
++            const cwd = sessionCwd;
+             let canonicalCwd;
+-            try {
+-                canonicalCwd = realpathSync(cwd);
++            if (profile.config.spawnCwd !== undefined || remoteCwd !== undefined) {
++                canonicalCwd = cwd;
+             }
+-            catch (error) {
+-                if (binding !== undefined) {
+-                    throw await this.blockError('cwd-changed', `cannot realpath cwd "${cwd}" (${errorChain(error)})`);
++            else {
++                try {
++                    canonicalCwd = realpathSync(cwd);
++                }
++                catch (error) {
++                    if (binding !== undefined) {
++                        throw await this.blockError('cwd-changed', `cannot realpath cwd "${cwd}" (${errorChain(error)})`);
++                    }
++                    throw error;
+                 }
+-                throw error;
+             }
+             const forkCandidate = this.driver.forkCandidate;
+             if (forkCandidate !== undefined) {
+@@ -1436,7 +1477,7 @@
                  // immutable seed length, so use that boundary for the defense-in-depth
                  // semantic check as well.  Anything appended after the seed (such as
                  // the child's turn/start or user input) must not affect eligibility.
@@ -136,7 +232,7 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
                  const parentMatches = this.session.header.parentSession === forkCandidate.parentSessionId
                      && parent.provider === this.providerRoute
                      // The DSH fork seed may include trailing host-only events (for
-@@ -1544,7 +1546,7 @@
+@@ -1544,7 +1585,7 @@
                  // 无论采用哪种 Agent 恢复方法，先证明 DSH 本地日志仍覆盖 binding 担保区间。
                  // session/resume 不提供回放，不能也不应伪造跨真源的逐字比较；它以同一
                  // session id + 启动身份预检 + Agent 成功恢复响应作为语义连续性契约。
@@ -145,7 +241,7 @@ diff -ruN a/lib/domain/session/agent.js b/lib/domain/session/agent.js
                  if (!range.ok) {
                      throw await this.blockError(range.cause, range.detail);
                  }
-@@ -1593,7 +1595,7 @@
+@@ -1593,7 +1634,7 @@
                      // Agent-specific replay projection 差异不应把用户锁在仍可用的原生会话外。
                      const replayTranslator = this.replayTranslator;
                      this.replayTranslator = undefined;
@@ -301,7 +397,7 @@ diff -ruN a/lib/domain/session/resume.js b/lib/domain/session/resume.js
  }
 diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/composition/installed-profile-registry.js
 --- a/lib/host/composition/installed-profile-registry.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/host/composition/installed-profile-registry.js	2026-11-01 20:11:23.839774152 +0800
++++ b/lib/host/composition/installed-profile-registry.js	2026-11-01 22:15:40.976514177 +0800
 @@ -31,6 +31,7 @@
  /// <reference types="node" />
  import fs from 'node:fs';
@@ -310,7 +406,48 @@ diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/compos
  import { FIBER_DISPOSED, FIBER_UNLOADING } from "../../host-compat/fiber-state.js";
  import { ACP_AGENT_IDS, ACP_AGENT_ID_PATTERN, ACP_SETTINGS_NS, acpAgentIdFromRoute, acpRouteId, descriptorOf, diffAcpAgentConfigs, } from "../../domain/session/agent-config.js";
  import { createAcpLogger } from "../../domain/observability/logging.js";
-@@ -349,23 +350,27 @@
+@@ -89,6 +90,29 @@
+     if (loginHint !== undefined && typeof loginHint !== 'string') {
+         throw new TypeError(`dsh-acp settings: agents.${id}.loginHint must be a string`);
+     }
++    // SSH/remote launch support: the process is spawned in a local directory
++    // (`spawnCwd`) while the ACP session keeps the DSH session cwd (remote).
++    // `cwdToken` occurrences in args are replaced with the shell-quoted session
++    // cwd, so a launcher like `ssh host sh -lc 'cd "$1" && ...' sh {cwd}` works.
++    const spawnCwd = raw['spawnCwd'];
++    if (spawnCwd !== undefined && (typeof spawnCwd !== 'string' || spawnCwd.length === 0 || !path.isAbsolute(spawnCwd))) {
++        throw new TypeError(`dsh-acp settings: agents.${id}.spawnCwd must be an absolute local directory`);
++    }
++    const cwdToken = raw['cwdToken'];
++    if (cwdToken !== undefined && (typeof cwdToken !== 'string' || cwdToken.length === 0)) {
++        throw new TypeError(`dsh-acp settings: agents.${id}.cwdToken must be a non-empty string`);
++    }
++    const probeCwd = raw['probeCwd'];
++    if (probeCwd !== undefined && (typeof probeCwd !== 'string' || probeCwd.length === 0 || !path.posix.isAbsolute(probeCwd))) {
++        throw new TypeError(`dsh-acp settings: agents.${id}.probeCwd must be an absolute POSIX path`);
++    }
++    // Per-session remote cwd table written by the workspace manager: DSH keeps
++    // a local placeholder cwd while the ACP session (and launcher) use the
++    // remote path recorded here.
++    const cwdMapFile = raw['cwdMapFile'];
++    if (cwdMapFile !== undefined && (typeof cwdMapFile !== 'string' || cwdMapFile.length === 0 || !path.isAbsolute(cwdMapFile))) {
++        throw new TypeError(`dsh-acp settings: agents.${id}.cwdMapFile must be an absolute path`);
++    }
+     // 边界：runtime 是 descriptor 绑定，只收四个合法值——非法值拒绝写入
+     // （普通 profile 不允许拼出宿主 path/env ref，也不允许指向不存在的 descriptor）
+     const runtime = raw['runtime'];
+@@ -102,6 +126,10 @@
+         env: { ...env },
+         ...(loginHint === undefined ? {} : { loginHint }),
+         ...(runtime === undefined ? {} : { runtime: runtime }),
++        ...(spawnCwd === undefined ? {} : { spawnCwd }),
++        ...(cwdToken === undefined ? {} : { cwdToken }),
++        ...(probeCwd === undefined ? {} : { probeCwd }),
++        ...(cwdMapFile === undefined ? {} : { cwdMapFile }),
+     };
+ }
+ /**
+@@ -349,23 +377,27 @@
              log.warn(`dsh-acp: agent config change audit failed (${error instanceof Error ? error.message : String(error)})`, { operation: 'audit', result: 'error' });
          }
      };
@@ -354,6 +491,57 @@ diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/compos
      });
      return {
          adapter,
+diff -ruN a/lib/host/composition/llm-stub.js b/lib/host/composition/llm-stub.js
+--- a/lib/host/composition/llm-stub.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/host/composition/llm-stub.js	2026-11-01 22:13:29.861506623 +0800
+@@ -30,6 +30,10 @@
+ // probe 缓存键的真源下沉到 domain/session/agent-config.ts（remote/创建门
+ // 消费）；本 re-export 保持稳定的 composition import 路径。
+ export { acpProbeConfigKey };
++/** POSIX single-quote one word for a remote shell command line. */
++function posixQuote(value) {
++    return `'${value.replaceAll("'", "'\\''")}'`;
++}
+ /** Extract the `category: 'model'` select options from a probe, flattening grouped options. */
+ function probeModels(provider, configOptions) {
+     const option = configOptions?.find((candidate) => candidate.category === 'model');
+@@ -187,9 +191,21 @@
+             // 与任何工作区无关。preparer 在场时使用 disposable run 目录作 cwd。
+             // （ownsCwd=false，probe 不自删，由 finally 的 cleanup 删除），env 由
+             // spawn 计划整体供给；缺省保持配置 env 原样透传的旧行为。
+-            const argv = [config.command, ...config.args];
++            // The probe's ACP session cwd is `probeCwd`; a remote launcher's cwd
++            // token must use the same directory so its `cd` succeeds.
++            const probeShellCwd = config.probeCwd ?? os.tmpdir();
++            const argv = [config.command, ...config.args].map((arg) => config.cwdToken === undefined
++                ? arg
++                : arg.split(config.cwdToken).join(posixQuote(probeShellCwd)));
+             const preparer = this.options.prepareProbe;
+             preparation = preparer === undefined ? undefined : await preparer({ provider, config, argv });
++            // 边界：disposable run 目录同时作 session/new 落点（options.cwd 提供则
++            // probe 不自删——由 finally 的 preparation.cleanup 删除）。
++            // 远程 profile 用配置的 probeCwd 作为 session/new 落点，spawn cwd 仍留在本机。
++            const sessionProbeCwd = config.probeCwd ?? preparation?.cwd;
++            const probeOptions = sessionProbeCwd === undefined
++                ? this.probeOptions
++                : { ...this.probeOptions, cwd: sessionProbeCwd };
+             const probe = await AcpClientConnection.probe(preparation === undefined
+                 ? { argv, cwd: os.tmpdir(), env: { ...config.env }, subprocess: resolution.seam }
+                 : {
+@@ -198,12 +214,7 @@
+                     env: {},
+                     spawnPlan: preparation.plan,
+                     subprocess: resolution.seam,
+-                }, 
+-            // 边界：disposable run 目录同时作 session/new 落点（options.cwd 提供则
+-            // probe 不自删——由 finally 的 preparation.cleanup 删除）。
+-            preparation?.cwd === undefined
+-                ? this.probeOptions
+-                : { ...this.probeOptions, cwd: preparation.cwd });
++                }, probeOptions);
+             const models = probeModels(provider, probe.configOptions);
+             this.options.metrics?.observe(ACP_METRIC.probe, Date.now() - started, { provider, result: 'ok' });
+             this.cache.set(provider, {
 diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
 --- a/lib/host/factory/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
 +++ b/lib/host/factory/agent-loop.js	2026-11-01 21:08:06.382613086 +0800
@@ -697,9 +885,21 @@ diff -ruN a/lib/host-compat/agent-loop.js b/lib/host-compat/agent-loop.js
          }
      })();
      internals.ownership.trackWrapper(published);
+diff -ruN a/lib/protocol/v1/connection.js b/lib/protocol/v1/connection.js
+--- a/lib/protocol/v1/connection.js	1985-10-26 16:15:00.000000000 +0800
++++ b/lib/protocol/v1/connection.js	2026-11-01 22:07:17.589967362 +0800
+@@ -201,7 +201,7 @@
+         // 结构化 spawn：argv 直达 seam，不经 shell（堵注入面； 经 spawnPlan/wrapArgv 包
+         // confine）。spawnPlan 存在时其 env 整体替换 spec.env（计划在组装期已含全量 env）。
+         // 进程旋钮是 AcpConnectionOptions 的进程半（AcpProcessOptions），原样透传。
+-        this.process = new AcpAgentProcess({ argv, cwd: spec.cwd, env: spec.spawnPlan !== undefined ? spec.spawnPlan.env : spec.env, subprocess: spec.subprocess }, options);
++        this.process = new AcpAgentProcess({ argv, cwd: spec.spawnCwd ?? spec.cwd, env: spec.spawnPlan !== undefined ? spec.spawnPlan.env : spec.env, subprocess: spec.subprocess }, options);
+         // Node 的 toWeb 与 SDK 期望的 lib.dom 流类型在 BYOB reader 签名上有结构性出入，
+         // 仅在接缝处做一次显式收窄（运行时是同一套 Node web stream 实现；sdk-contract 先例）。
+         const stream = acp.ndJsonStream(Writable.toWeb(this.process.stdin), Readable.toWeb(this.process.stdout));
 diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
 --- a/lib/protocol/v1/translate.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/protocol/v1/translate.js	2026-11-01 21:12:33.943721987 +0800
++++ b/lib/protocol/v1/translate.js	2026-11-01 22:21:48.770952805 +0800
 @@ -87,7 +87,7 @@
   * 显式引入 @types/node（src/protocol/v1/connection.ts 同款先例），不改动共享 tsconfig。
   */
@@ -744,15 +944,19 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
      }
      /**
     * 确保当前有开放的 assistant segment（文本/plan/占位内容落盘前调用）；
-@@ -1230,18 +1234,14 @@
+@@ -1230,18 +1234,15 @@
          const callTitle = boundAcpToolTitle(update.title) ?? acpUnknownToolName(update.toolCallId);
          const assistantCall = {
              type: 'tool-call',
 -            id: CallId(update.toolCallId),
+-            // 轨迹使用 assistant block 的 name 展示；这里保留 ACP 的人类可读标题。
+-            // 独立 tool/call 仍使用稳定 wire name，以命中插件的 keyed toolview。
+-            name: callTitle,
 +            id: ToolCallId(update.toolCallId),
-             // 轨迹使用 assistant block 的 name 展示；这里保留 ACP 的人类可读标题。
-             // 独立 tool/call 仍使用稳定 wire name，以命中插件的 keyed toolview。
-             name: callTitle,
++            // DSH 0.2 validates that a `tool/call` matches the name advertised by
++            // the assistant block, so both use the stable wire name. The human
++            // title lives in the card meta below.
++            name: ACP_EXTERNAL_TOOL_NAME,
              arguments: JSON.stringify(update.rawInput ?? {}),
          };
 -        const callChunk = this.sink.append('assistant/chunk', {
@@ -766,7 +970,7 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
          events.push(this.sink.append('assistant/message', {
              turn: this.turnNumber,
              step,
-@@ -1249,12 +1249,13 @@
+@@ -1249,12 +1250,13 @@
                  content: [assistantCall],
                  source: { provider: this.currentRoute.provider, model: this.effectiveModel() },
              }),
@@ -782,7 +986,7 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
              // name 恒为稳定名——宿主 keyed `tool.call.toolview` 槽位按 wire
              // tool name 分发（ui-tool ToolCallTree 的 entryKey），动态 title 会让
              // 渲染器永远无法稳定命中。首帧 wire title 随 meta.acpToolCall.title
-@@ -1390,7 +1391,7 @@
+@@ -1390,7 +1392,7 @@
          }
          const isError = status === 'failed';
          const message = createToolResultMessage({
@@ -791,7 +995,7 @@ diff -ruN a/lib/protocol/v1/translate.js b/lib/protocol/v1/translate.js
              content: mapped.blocks,
              isError,
          });
-@@ -1518,9 +1519,8 @@
+@@ -1518,9 +1520,8 @@
              step,
              message,
          };

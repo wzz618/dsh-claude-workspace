@@ -1,4 +1,6 @@
 import { test } from 'node:test'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import { resolveConfig, type CcwConfigInput } from '../../src/config.ts'
 import { NativeSessionBridge, type NativeAgents, type NativeSessionInput } from '../../src/native/bridge.ts'
@@ -291,42 +293,43 @@ test('service-level entry registers the workspace, then creates a native session
   }
 })
 
-test('service-level entry rejects a remote workspace with host-unsupported', async () => {
+const stubSshHost = {
+  id: 'remote',
+  kind: 'ssh' as const,
+  async stat() {
+    return { exists: true, isDirectory: true }
+  },
+  async mkdirp() {},
+  async realpath(path: string) {
+    return path
+  },
+  async listDirectory() {
+    return []
+  },
+  async readText() {
+    return undefined
+  },
+  async writeTextAtomic() {},
+  async removeFile() {},
+  async home() {
+    return '/home/ubuntu'
+  },
+  async probe() {
+    return { found: true }
+  },
+  async exec() {
+    return { code: 0, signal: null, stdout: '', stderr: '' }
+  },
+  async spawn() {
+    throw new Error('unused')
+  },
+  async spawnAcp() {
+    throw new Error('unused')
+  },
+}
+
+test('a remote workspace without probeCwd fails with actionable configuration guidance', async () => {
   const dataDir = await makeTempDir()
-  const stubHost = {
-    id: 'remote',
-    kind: 'ssh' as const,
-    async stat() {
-      return { exists: true, isDirectory: true }
-    },
-    async mkdirp() {},
-    async realpath(path: string) {
-      return path
-    },
-    async listDirectory() {
-      return []
-    },
-    async readText() {
-      return undefined
-    },
-    async writeTextAtomic() {},
-    async removeFile() {},
-    async home() {
-      return '/home/ubuntu'
-    },
-    async probe() {
-      return { found: true }
-    },
-    async exec() {
-      return { code: 0, signal: null, stdout: '', stderr: '' }
-    },
-    async spawn() {
-      throw new Error('unused')
-    },
-    async spawnAcp() {
-      throw new Error('unused')
-    },
-  }
   const service = createService({
     config: {
       dataDir,
@@ -335,7 +338,7 @@ test('service-level entry rejects a remote workspace with host-unsupported', asy
         remote: { kind: 'ssh', alias: 'remote' },
       },
     },
-    hostFactory: () => stubHost,
+    hostFactory: () => stubSshHost,
     services: lookup({}),
   })
   try {
@@ -343,9 +346,43 @@ test('service-level entry rejects a remote workspace with host-unsupported', asy
     await assert.rejects(
       service.createNativeSession(created.workspace.id),
       (error: unknown) => error instanceof CcwError
-        && error.code === 'host-unsupported'
-        && /Use the Claude console/.test(error.message),
+        && error.code === 'config-invalid'
+        && /probeCwd/.test(error.message),
     )
+  } finally {
+    await service.close()
+    await removeTempDir(dataDir)
+  }
+})
+
+test('a remote workspace with probeCwd creates a native session on its host provider', async () => {
+  const dataDir = await makeTempDir()
+  const agents = fakeAgents()
+  const presets = fakePresets()
+  const service = createService({
+    config: {
+      dataDir,
+      hosts: {
+        local: { kind: 'local' },
+        devbox: { kind: 'ssh', alias: 'devbox', probeCwd: '/home/dev/project' },
+      },
+      native: { attachToWorkspace: false, cwdMapFile: join(dataDir, 'dsh-acp', 'native-cwd.json') },
+    },
+    hostFactory: () => stubSshHost,
+    services: lookup({ agents, permissionPresets: presets }),
+    newId: () => 'ws_remote',
+  })
+  try {
+    const created = await service.createWorkspace({ hostId: 'devbox', title: 'Remote', dir: '/srv/demo' })
+    const result = await service.createNativeSession(created.workspace.id)
+    assert.equal(result.sessionId.startsWith('session-'), true)
+    assert.equal(agents.calls.length, 1)
+    assert.deepEqual(agents.calls[0]!.agentOptions, { provider: 'acp-claude-code-devbox', model: 'default' })
+    assert.equal(agents.calls[0]!.meta!.cwd, join(dataDir, 'remote-workspaces', 'ws_remote'))
+    const cwdMap = JSON.parse(await readFile(join(dataDir, 'dsh-acp', 'native-cwd.json'), 'utf8')) as {
+      sessions: Record<string, string>
+    }
+    assert.deepEqual(cwdMap.sessions, { [result.sessionId]: '/srv/demo' })
   } finally {
     await service.close()
     await removeTempDir(dataDir)

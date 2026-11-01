@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { basename, isAbsolute, posix } from 'node:path'
+import { mkdir } from 'node:fs/promises'
+import { basename, isAbsolute, join, posix } from 'node:path'
 import type { ResolvedConfig, WorkspaceStrategy } from '../config.ts'
 import type { HostOps } from '../host/types.ts'
 import { CcwError } from '../util/errors.ts'
@@ -104,7 +105,11 @@ export async function createWorkspace(
   }
 
   const title = normalizeTitle(input.title, dir)
-  const registration = await deps.registry.register({ path: dir, title })
+  // SSH workspaces keep their remote directory in the CCW record; DSH owns a
+  // local placeholder so no host-local directory is created at a remote path.
+  const registrationPath = dshWorkspacePath(deps.config, id, hostRef, dir)
+  if (hostRef.kind === 'ssh') await mkdir(registrationPath, { recursive: true, mode: 0o700 })
+  const registration = await deps.registry.register({ path: registrationPath, title })
   if (registration === undefined && deps.registry.available) {
     throw new CcwError('workspace-registration-failed', `DSH did not return a workspace for ${dir}`, { path: dir })
   }
@@ -136,6 +141,28 @@ export async function createWorkspace(
     throw error
   }
   return { workspace, created: true, warnings }
+}
+
+/**
+ * Local directory DSH registers for one workspace.
+ *
+ * SSH workspaces keep their remote directory on the CCW record; DSH receives an
+ * empty local placeholder so its registry never creates host-local directories
+ * at remote paths.
+ *
+ * @param config - Resolved plugin configuration.
+ * @param workspaceId - Plugin workspace id.
+ * @param host - Workspace host reference.
+ * @param dir - Workspace directory on that host.
+ * @returns the path passed to the DSH workspace controller.
+ */
+export function dshWorkspacePath(
+  config: ResolvedConfig,
+  workspaceId: string,
+  host: HostRef,
+  dir: string,
+): string {
+  return host.kind === 'ssh' ? join(config.dataDir, 'remote-workspaces', workspaceId) : dir
 }
 
 /**

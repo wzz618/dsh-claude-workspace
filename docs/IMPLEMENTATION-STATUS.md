@@ -10,7 +10,7 @@
 |---|---|---|
 | P0 可行性 | 已完成（计划提供） | 握手、prompt、权限、diff、取消、`session/load`、ssh 传输均有实测记录。 |
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
-| P2 呈现层 | **P2a 完成；P2b 可用（原生入口 + 重启恢复）** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 跑通；新增一键「新建 Claude 会话」入口，并补齐 0.2.1 持久化/恢复 API 迁移。 |
+| P2 呈现层 | **P2a 完成；P2b 可用（本地/SSH 原生入口 + 重启恢复）** | P2a：右侧栏控制台完整。P2b：fork 适配器 host 侧、移除其客户端，DSH 原生会话 UI 跑通；一键「新建 Claude 会话」支持本地与 SSH 工作区，并补齐 0.2.1 持久化/恢复 API 迁移。 |
 | P3 远程 | **P3 完成** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读写、断线标记/过期/重连、`sessions/reconnect` 与控制台重连。localhost 与**第二台 Ubuntu VM 真实 Claude** 均 PASS。 |
 | P4 细节对齐 | **P4a 完成 + 图片压缩 + 子 agent 工具树** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB，超限自动缩放重编码）；工具卡按 `parentToolCallId` 嵌套子 agent；计划卡与模型选择已在前序完成。`@` 索引一致与快捷键扩展仍待做。 |
 | P5 硬化 | **P5a + P5b 完成，npm 发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志（0600）、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查、Node 22/24 CI 矩阵；未执行真实 npm 发布。 |
@@ -168,13 +168,18 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
   `ctx.agents.create()`，挂到 DSH 工作区，写入 `native.permissionPreset`，
   返回 sessionId；客户端用 `uiWorkspace.openSession()` 直接打开原生会话。
   配置见 `native.provider/model/permissionPreset/attachToWorkspace`。
-- **agents.json 由本地 host 配置补齐**：插件加载时把 `hosts.<local>` 的
-  `executable/args/env` 写进 `native.agentsFile`（默认
-  `$DSH_HOME/dsh-acp/agents.json`），已存在的同名 agent 不覆盖；可用
-  `native.seedAgentsFile: false` 关闭。结果通过 `/status` 的 `native.seed`
-  报告（`created/present/skipped/failed`）。真机验证：清空 agents.json →
-  重启 → 自动写入项目内 `claude-agent-acp` → 原生会话正常回复。
-- CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口（也是 SSH 工作区唯一入口）
+- **agents.json 由 host 配置补齐**：插件加载时把每个 host 的启动方式写进
+  `native.agentsFile`（默认 `$DSH_HOME/dsh-acp/agents.json`）。本地 host 直接写
+  `executable/args/env`；SSH host 写 `ssh` 启动器（`spawnCwd` + `cwdToken` +
+  `probeCwd` + `cwdMapFile`）。带 `managedBy` 的条目会随配置刷新，手工条目
+  不覆盖；`native.seedAgentsFile: false` 可关闭。结果通过 `/status` 的
+  `native.seed` 报告（`created/updated/present/skipped/failed/partial`）。
+- **SSH 工作区原生入口**：每台 SSH host 自动得到 `acp-claude-code-<host>`
+  provider。创建会话时 CCW 把远端目录写入 `native.cwdMapFile`，DSH 会话本身
+  使用本地占位目录（与 DSH 工作区路径一致）以便挂载与恢复；适配器在会话启动时
+  读取映射，用远端目录 `cd` 并作为 ACP `session/new` 的 cwd。远端目录不在本机
+  创建，DSH 注册表也不会在远端路径上建本地目录。
+- CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口
 
 ### 原生入口真机验证（2026-11-01）
 
@@ -204,6 +209,27 @@ sessionId 路由事件与权限，不需要额外锁。
    按 snapshot 的 `header.id` 匹配。
 4. **`assistant/chunk` 已不在 0.2 词表**：翻译器不再 append 该事件，否则日志会被
    session query 拒绝（`contains event type "assistant/chunk" unknown`）。
+5. **tool/call 名称校验**：0.2 的 session query 要求 `tool/call` 与 assistant
+   block 广告的 tool-call 同名；assistant block 改用稳定 wire name
+   `dsh_acp_external_tool`，人类可读标题仍在 card meta 中。
+6. **SSH 启动语义**：新增 profile 字段 `spawnCwd`（本机 spawn 目录（本地占位））、
+   `cwdToken`（替换为 shell-quoted 会话 cwd）、`probeCwd`（远端模型探测目录）、
+   `cwdMapFile`（按 sessionId 读取远端 cwd）；远端 cwd 不做本机 realpath。
+
+### SSH 原生入口真机验证（第二台 Ubuntu VM，2026-11-01）
+
+目标机 `ubuntu@42.193.248.137`，远端安装 `@agentclientprotocol/claude-agent-acp@0.99.1`
+于 `~/.ccw-acp`，`probeCwd=/home/ubuntu/PYProject/claude-code-test`：
+
+1. 插件启动自动写入 `claude-code-devbox`（`ssh` 启动器 + `cwdToken` + `cwdMapFile`），
+   重启后条目被识别为 `managedBy` 并刷新为最新字段
+2. `POST /workspaces/create`（host=devbox，dir=远端路径）→ DSH 注册路径为
+   `$DSH_HOME/claude-code/remote-workspaces/<workspaceId>` 本地占位目录
+3. `POST /sessions/native-create` → `workspaceAttached:true`；`native-cwd.json`
+   记录 `sessionId → /home/ubuntu/PYProject/claude-code-test`
+4. 提示词让 Claude 执行 `pwd; hostname; ls` → 输出远端路径、`VM-0-14-ubuntu`
+   与远端项目文件，证明工具运行在远端
+5. 重启 DSH → 同一会话再次 prompt → 恢复成功，第二轮仍返回远端机器与目录
 
 ### 审计与 state 边界
 
@@ -225,10 +251,9 @@ sessionId 路由事件与权限，不需要额外锁。
 
 ### 尚需
 
-- SSH 工作区的原生入口（当前 agents.json 只由本地 host 自动补齐）
 - 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回
-- 跨机原生回归（当前原生入口只支持本地工作区）
 - token 级流式显示（0.2 无 `assistant/chunk`，助手文本段末一次性出现）
+- 远端 ACP 运行不受 DSH 沙箱约束（ssh 启动器本身在本机 spawn 计划内）
 
 ## P4a composer 与工具树（2026-11-01）
 

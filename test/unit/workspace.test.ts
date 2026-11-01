@@ -230,3 +230,63 @@ test('session bindings persist and are found by ACP id', async () => {
     await context.cleanup()
   }
 })
+
+test('an SSH workspace registers a local placeholder, not the remote path', async () => {
+  const dataDir = await makeTempDir()
+  try {
+    const config = resolveConfig({
+      dataDir,
+      hosts: {
+        local: { kind: 'local' },
+        devbox: { kind: 'ssh', alias: 'devbox', probeCwd: '/home/dev/project' },
+      },
+      workspaces: { baseDir: join(dataDir, 'workspaces') },
+    })
+    const workspaces = new WorkspaceStore(dataDir)
+    const registry = new FakeRegistry()
+    const stubHost = {
+      id: 'devbox',
+      kind: 'ssh' as const,
+      async stat() {
+        return { exists: true, isDirectory: true }
+      },
+      async mkdirp() {},
+      async realpath(path: string) {
+        return path
+      },
+      async listDirectory() {
+        return []
+      },
+      async readText() {
+        return undefined
+      },
+      async writeTextAtomic() {},
+      async removeFile() {},
+      async home() {
+        return '/home/dev'
+      },
+      async probe() {
+        return { found: true }
+      },
+      async exec() {
+        return { code: 0, signal: null, stdout: '', stderr: '' }
+      },
+      async spawn() {
+        throw new Error('unused')
+      },
+      async spawnAcp() {
+        throw new Error('unused')
+      },
+    }
+    const result = await createWorkspace(
+      { config, workspaces, registry, host: () => stubHost, newId: () => 'ws_remote' },
+      { hostId: 'devbox', dir: '/srv/demo', title: 'Remote' },
+    )
+    assert.equal(result.workspace.dir, '/srv/demo')
+    const registeredPath = registry.registrations.get(result.workspace.dshWorkspaceId!)!.path
+    assert.equal(registeredPath, join(dataDir, 'remote-workspaces', 'ws_remote'))
+    assert.equal(existsSync(registeredPath), true)
+  } finally {
+    await removeTempDir(dataDir)
+  }
+})
