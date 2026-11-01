@@ -986,6 +986,14 @@ export class CcwService {
           argsHash: hashArgs(params.toolCall.rawInput),
           decision: `auto:${matched}`,
         })
+        this.#emitTranslator([{
+          type: 'auto-approved',
+          sessionId: dshSessionId ?? params.sessionId,
+          seq: 0,
+          replay: false,
+          toolCallId: params.toolCall.toolCallId,
+          rule: matched,
+        }], dshSessionId ?? params.sessionId)
         return { outcome: 'selected', optionId: allowOnce.optionId }
       }
     }

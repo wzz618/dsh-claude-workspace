@@ -28,7 +28,7 @@
 
 ## 已验证行为（自动化）
 
-`npm test`：129 个用例全部通过。
+`npm test`：131 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -144,6 +144,7 @@
 - 单测覆盖：滚动/单文件/超大单块、日志配置默认值与越界、PlanGate 记录与决策
 - **安装/卸载残留检查**：`test/real/plugin-install.ts` 在临时 `DSH_HOME` 中 add → dump → remove → dump，断言插件行、依赖与 bundle 全部清理
 - **`@` 列举范围收紧**：只允许工作区根或当前会话 cwd，不能借派生根浏览兄弟工作区
+- **自动放行标记**：命中会话放宽规则时发出 `auto-approved` 事件，工具卡显示 `auto` 徽标，并写 `auto:<rule>` 审计
 
 剩余 P5：CI 兼容矩阵、日志内容脱敏策略复核、正式发布。
 
@@ -183,7 +184,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 | Q8 | 已做 spike：适配器 rc.10 在 DSH 0.2.1-rc.5 上因 `CallId`/`Inbox` 移除而无法加载，host-compat 绑定旧私有结构；直接复用不可行，P2b 需 fork+迁移或自写桥。 |
 | Q9 | 只实现 ACP v1；v2 未评估。 |
 | Q11 | 已在 `#load` 后重新应用 `model`/`effort`/`mode`；真机已执行「设为 default → 重启 load → 重设无报错，回放 31 条」，但因 ACP 无读取当前模型的接口，未直接断言加载后的实际模型值。 |
-| Q12 | 自动放行写审计 `auto:<rule>`；真机确认取消后卡片保持 `cancelled`。UI 的 auto 徽标仍待 P2。 |
+| Q12 | 自动放行写审计 `auto:<rule>`；服务发出 `auto-approved` 事件，控制台工具卡显示 `auto` 徽标；真机确认取消后卡片保持 `cancelled`。 |
 | Q13 | 本机 Node 24.14.0 下真实 ACP 通过；包声明 `>=22.19.0`，未在 Node 20 上验证。 |
 | Q15 | 真机观察到 Claude 转发路径写入 `Bash(python3 -c 'import time; time.sleep\(2\)')`，与本插件 `escapeRule` 的转义规则一致。 |
 | Q16 | 工具级规则（只写 `Bash`/`Edit`/`WebFetch`）是否等价全放行未真机验证。 |

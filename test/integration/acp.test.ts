@@ -134,8 +134,28 @@ test('widening to a command prefix writes the rule and answers allow-once', asyn
   }
 })
 
-test('cancelling a running turn resolves as cancelled', async () => {
-  const context = await setup('slow')
+test('a widened session rule auto-approves the next matching call', async () => {
+  const context = await setup('bash')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const first = context.service.prompt({ dshSessionId: 'dsh-1', text: 'run tests' })
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.widenPermission({ requestId: pending.requestId, scope: 'prefix' })
+    await first
+
+    const second = context.service.prompt({ dshSessionId: 'dsh-1', text: 'run tests again' })
+    const outcome = await second
+    assert.equal(outcome.stopReason, 'end_turn')
+    assert.ok(context.events.some(
+      (event) => event.type === 'auto-approved' && event.rule === 'Bash(npm test:*)',
+    ))
+    assert.equal(context.service.pendingApprovals('dsh-1').length, 0)
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('cancelling a running turn resolves as cancelled', async () => {  const context = await setup('slow')
   try {
     await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
     const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'wait forever' })

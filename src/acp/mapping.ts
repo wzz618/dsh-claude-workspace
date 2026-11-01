@@ -63,6 +63,15 @@ export type CcwEvent =
       readonly commands: readonly AvailableCommand[]
     }
   | { readonly type: 'mode'; readonly sessionId: string; readonly seq: number; readonly replay: boolean; readonly modeId: string }
+  | {
+      readonly type: 'auto-approved'
+      readonly sessionId: string
+      readonly seq: number
+      readonly replay: boolean
+      readonly toolCallId: string
+      /** Rule that covered the call, for the card badge. */
+      readonly rule: string
+    }
   | { readonly type: 'usage'; readonly sessionId: string; readonly seq: number; readonly replay: boolean; readonly data: unknown }
   | {
       readonly type: 'config-option'

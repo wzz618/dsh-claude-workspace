@@ -80,6 +80,7 @@ window.__ModuleLoader__.load({
 			approvals: '待审批',
 			noApprovals: '没有待审批的请求。',
 			pendingApprovals: '个待审批',
+			autoApproved: '自动放行',
 			send: '发送',
 			sending: '发送中…',
 			promptPlaceholder: '描述要在这个工作区完成的任务…',
@@ -167,6 +168,7 @@ window.__ModuleLoader__.load({
 			approvals: 'Pending approvals',
 			noApprovals: 'No pending requests.',
 			pendingApprovals: 'pending',
+			autoApproved: 'auto',
 			send: 'Send',
 			sending: 'Sending…',
 			promptPlaceholder: 'Describe the task for this workspace…',
@@ -328,6 +330,17 @@ window.__ModuleLoader__.load({
 			return (commands || [])
 				.filter((command) => command && typeof command.name === 'string' && `/${command.name}`.toLowerCase().startsWith(needle))
 				.slice(0, 8)
+		}
+
+		/** Auto-approved tool calls and the rule that allowed them. */
+		function autoApprovals(events) {
+			const approved = {}
+			for (const event of events) {
+				if (event !== null && event !== undefined && event.type === 'auto-approved') {
+					approved[event.toolCallId] = event.rule
+				}
+			}
+			return approved
 		}
 
 		/** Path relative to a root directory, or the absolute path when outside it. */
@@ -862,6 +875,7 @@ window.__ModuleLoader__.load({
 				const groups = groupEvents(events)
 				const commands = latestCommands(events)
 				const commandMatches = matchCommands(commands, promptText)
+				const approvedByRule = autoApprovals(events)
 				let sawReplay = false
 				const streamNodes = []
 				for (const item of groups) {
@@ -891,6 +905,9 @@ window.__ModuleLoader__.load({
 							children: [
 								h('summary', { style: styles.toolSummary, children: [
 									h(Badge, { children: card.kind || t('toolLabel') }),
+									approvedByRule[card.toolCallId]
+										? h(Badge, { style: { color: 'var(--dsw-alias-state-success-primary, #237804)' }, children: t('autoApproved') })
+										: null,
 									h('span', { style: { flex: '1 1 auto' }, children: card.title }),
 									h('span', { style: { ...styles.badge, ...statusStyle(card.status) }, children: statusLabel(t, card.status) }),
 								] }),
@@ -1257,6 +1274,7 @@ window.__ModuleLoader__.load({
 		exports.toolInputSummary = toolInputSummary
 		exports.latestCommands = latestCommands
 		exports.matchCommands = matchCommands
+		exports.autoApprovals = autoApprovals
 		exports.relativeWithin = relativeWithin
 		exports.parentDirectory = parentDirectory
 		return module.exports

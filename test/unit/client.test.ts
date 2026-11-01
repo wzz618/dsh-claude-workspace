@@ -42,6 +42,7 @@ const flattenSelectValues = client.flattenSelectValues as (a: unknown[]) => { va
 const toolInputSummary = client.toolInputSummary as (a: unknown) => string
 const latestCommands = client.latestCommands as (events: unknown[]) => { name: string; description?: string }[]
 const matchCommands = client.matchCommands as (commands: unknown[], draft: string) => { name: string }[]
+const autoApprovals = client.autoApprovals as (events: unknown[]) => Record<string, string>
 const relativeWithin = client.relativeWithin as (root: string, path: string) => string
 const parentDirectory = client.parentDirectory as (directory: string, root: string) => string
 
@@ -119,6 +120,15 @@ test('relativeWithin and parentDirectory stay under the picker root', () => {
   assert.equal(parentDirectory('/w/project/src/deep', '/w/project'), '/w/project/src')
   assert.equal(parentDirectory('/w/project', '/w/project'), '/w/project')
   assert.equal(parentDirectory('/w/project/src', '/w/project'), '/w/project')
+})
+
+test('autoApprovals maps each auto-approved tool call to its rule', () => {
+  assert.deepEqual(autoApprovals([
+    { type: 'auto-approved', toolCallId: 't1', rule: 'Bash(npm test:*)' },
+    { type: 'assistant-text', text: 'x' },
+    { type: 'auto-approved', toolCallId: 't2', rule: 'Edit(**)' },
+  ]), { t1: 'Bash(npm test:*)', t2: 'Edit(**)' })
+  assert.deepEqual(autoApprovals([]), {})
 })
 
 test('apply registers the settings section and the right-sidebar tab type', () => {
