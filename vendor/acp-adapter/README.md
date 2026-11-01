@@ -38,7 +38,11 @@ pnpm dsh --profile web --dump-config | grep -A3 agent-loop-acp
 
 1. 工作区新建会话；
 2. 访问模式切到 **Full access** 并确认（Native Agent Access）；
-3. 模型选择 `Claude Code · ACP`（或把默认模型设为 `provider: acp-claude-code`）；
+3. 只有显式选择 `Claude Code · ACP` 的会话才走 Claude；默认模型保持
+   `opencode-go`，原生会话继续使用 DSH 的 loop 与 `OPENCODE_GO_API_KEY`。
+   注意：原生模型选择器在会话已创建后再切换 provider 不会重建 Agent；
+   需要 Claude 时应在新建会话时选择 ACP（或临时把默认模型设为
+   `acp-claude-code`）。
 4. 发送任务即可在**原生会话 UI** 中看到 thinking、工具卡与回复。
 
 ## 上游版本与许可
@@ -58,13 +62,15 @@ patch 包含：
 5. `ownerCtx.agent` → `undefined`
 6. `assistant/message` 去掉 `sourceEventSeqs`、补 `stream: []`
 7. `settings.register` → `$DSH_HOME/dsh-acp/agents.json`
-8. 无 ACP provider 时默认路由首个 ACP profile
+8. `createAgent` 仅在 provider 命中 `acp-*` 路由时接管；其余会话交给原生 loop（不做默认劫持）
 9. Full access（`never` 策略）下 ACP 权限回 `allow-once`
 10. 移除上游 `dsh.client`（客户端半区），保留原生 `ui-model-selection`
 
 ## 已知限制（P2b 待办）
 
-- 不是 CCW 工作区/主机模型：目前使用静态 `agents.json` 与默认模型路由。
+- 不是 CCW 工作区/主机模型：目前使用静态 `agents.json`。
+- 原生模型选择器在已有会话内切换 ACP 不会重建 Agent；opt-in 入口仍需完善
+  （CCW 右侧栏控制台是当前可靠的 Claude 入口）。
 - 权限选项未保真：Full access 下自动 `allow-once`，`allow-with-updates`
   需接回 CCW 权限 Dock。
 - 上游 sidecar/audit 与 CCW 审计并存，需要划清边界。

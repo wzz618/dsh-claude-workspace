@@ -153,12 +153,21 @@ fork 适配器的 **host 侧**（`AcpAgent`、`translate`、`process`、`remote`
 5. `ownerCtx.agent` 在 0.2.x 触发未注入属性保护 → 顶级会话传 `undefined`
 6. `assistant/message` 不能带 `sourceEventSeqs` → 去掉该 intent 并补 `stream: []`
 7. `settings.register` 移除 → `$DSH_HOME/dsh-acp/agents.json` 种子 profile
-8. `createAgent` 在无 ACP provider 时默认路由到首个 ACP profile（否则原生会话走 stub route 并报 `ACP_STUB_ROUTE`）
+8. `createAgent` 只在 provider 命中 `acp-*` 路由时接管；默认模型保持 `opencode-go`，不做全局劫持（早期版本曾默认路由 ACP，已恢复）
 9. Full access 下 DSH 审批策略为 `never`（原生工具不审批）→ ACP 权限桥在 `never` 下按 Native Agent Access 语义回 `allow-once`，否则 Claude 会收到拒绝
 10. 适配器 `dsh.client` 移除，保留原生 `ui-model-selection`；Native Agent Access 需在 UI 中二次确认
 
+### 当前默认与 opt-in
+
+- DSH 默认模型：`opencode-go / deepseek-v4.1-flash`，继续使用 DSH 原生 loop 与
+  `~/.dsh/.credentials.yaml` 中 `refs.OPENCODE_GO_API_KEY` 保存的 token
+- Claude：只有显式选择 `Claude Code · ACP` 的会话才由 fork 接管；原生模型选择器
+  在会话已创建后再切换不会重建 Agent，因此新建会话时就要选 ACP（或临时改默认）
+- CCW 右侧栏控制台仍是不依赖模型选择器的 Claude 入口
+
 ### 尚需
 
+- 做可靠的“新建 Claude 会话”opt-in 入口（当前原生 picker 有时序限制）
 - 把 fork 收入仓库（`vendor/`）、补齐依赖安装与打包/许可证 NOTICE
 - 用 CCW 的工作区/主机配置替代 `agents.json` + 默认模型 hack
 - 权限选项保真：当前 Full access 下自动 allow-once；`allow-with-updates` 与 CCW 权限 Dock 待接回

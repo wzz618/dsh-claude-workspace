@@ -356,7 +356,7 @@ diff -ruN a/lib/host/composition/installed-profile-registry.js b/lib/host/compos
          adapter,
 diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
 --- a/lib/host/factory/agent-loop.js	1985-10-26 16:15:00.000000000 +0800
-+++ b/lib/host/factory/agent-loop.js	2026-11-01 19:43:24.000000000 +0800
++++ b/lib/host/factory/agent-loop.js	2026-11-01 20:11:03.000000000 +0800
 @@ -180,8 +180,8 @@
   * dsh-user-approval 的 hasOpenTurn 判定）。
   */
@@ -368,41 +368,7 @@ diff -ruN a/lib/host/factory/agent-loop.js b/lib/host/factory/agent-loop.js
          if (type === 'turn/start')
              return true;
          if (type === 'turn/end')
-@@ -589,9 +589,19 @@
-         // DSH's transient default is not authoritative for a fork. If the seed
-         // proves an ACP route, keep that route (and model) even when the caller
-         // supplied the currently selected global default from another backend.
--        const provider = options.meta?.parentSession !== undefined && seedProvider?.startsWith('acp-') === true
-+        let provider = options.meta?.parentSession !== undefined && seedProvider?.startsWith('acp-') === true
-             ? seedProvider
-             : options.agentOptions?.provider;
-+        let hijacked = false;
-+        // CCW fork: when no ACP provider is selected, fall back to the first
-+        // configured ACP profile so every new session runs Claude Code.
-+        if (provider === undefined || this.installedProfileRegistry.resolveRoute(provider) === undefined) {
-+            const routes = [...this.installedProfileRegistry.agents().keys()].sort();
-+            if (routes.length > 0) {
-+                provider = routes[0];
-+                hijacked = true;
-+            }
-+        }
-         if (provider === undefined)
-             return super.createAgent(ownerCtx, options);
-         const resolved = this.installedProfileRegistry.resolveRoute(provider);
-@@ -599,9 +609,11 @@
-             return super.createAgent(ownerCtx, options);
-         const agentOptions = {
-             ...(options.agentOptions ?? {}),
--            ...(seedProvider === provider && seedHeader?.config.model === undefined ? {} : seedProvider === provider && seedHeader?.config.model !== undefined ? { model: seedHeader.config.model } : {}),
-+            ...(!hijacked && seedProvider === provider && seedHeader?.config.model === undefined ? {} : !hijacked && seedProvider === provider && seedHeader?.config.model !== undefined ? { model: seedHeader.config.model } : {}),
-             provider,
-         };
-+        if (hijacked)
-+            delete agentOptions.model;
-         await this.acpRouteReady();
-         const forkResolution = await this.resolveForkCandidate(options, provider);
-         // 会话创建门：只有五态为 ready 的 profile 允许创建新 ACP 会话
-@@ -928,6 +940,17 @@
+@@ -928,6 +928,17 @@
              dshSessionId: String(id),
              workspaceRoot: session.header.cwd ?? process.cwd(),
              approval: getCtxSlot(loopCtx, 'approval'),
