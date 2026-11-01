@@ -32,6 +32,10 @@ test('lists the workspace directory and refuses directories outside it', async (
       /outside workspace/,
     )
     await assert.rejects(
+      service.listWorkspaceDirectory(created.workspace.id, { dir: join(created.workspace.baseDir, 'sibling') }),
+      /outside workspace/,
+    )
+    await assert.rejects(
       service.listWorkspaceDirectory(created.workspace.id, { dir: 'relative/path' }),
       /must be absolute/,
     )

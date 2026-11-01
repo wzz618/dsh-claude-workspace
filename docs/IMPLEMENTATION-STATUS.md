@@ -13,7 +13,7 @@
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
 | P3 远程 | **P3a/P3b 完成，跨机待验证** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写；断线标记、pending 过期审计、`sessions/reconnect` 与控制台重连按钮。localhost SSH 真机 PASS；**独立物理机尚未验证。** |
 | P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
-| P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志（`logs.maxBytes`/`logs.files`）、`prepack` 自动构建；未做发布、CI 矩阵、安装/卸载残留自动检查。 |
+| P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志、`prepack` 自动构建、隔离 `DSH_HOME` 的安装/卸载残留检查；未做发布与 CI 矩阵。 |
 
 ## §12.3 实现顺序对照
 
@@ -142,8 +142,10 @@
 - **审计保留**：服务启动时按 `audit.retainDays` 清理
 - **发布前构建**：`package.json` 增加 `prepack: npm run build`，避免发布包缺 `lib/`
 - 单测覆盖：滚动/单文件/超大单块、日志配置默认值与越界、PlanGate 记录与决策
+- **安装/卸载残留检查**：`test/real/plugin-install.ts` 在临时 `DSH_HOME` 中 add → dump → remove → dump，断言插件行、依赖与 bundle 全部清理
+- **`@` 列举范围收紧**：只允许工作区根或当前会话 cwd，不能借派生根浏览兄弟工作区
 
-剩余 P5：CI 兼容矩阵、安装/卸载残留自动检查、日志内容脱敏策略复核、正式发布。
+剩余 P5：CI 兼容矩阵、日志内容脱敏策略复核、正式发布。
 
 ### DSH Loader 装配（隔离环境）
 

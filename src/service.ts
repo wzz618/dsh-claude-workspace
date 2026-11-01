@@ -781,7 +781,8 @@ export class CcwService {
       throw new CcwError('dir-not-found', `directory must be absolute: ${target}`, { dir: target })
     }
     const normalized = posix.normalize(target)
-    if (!isSubpath(workspace.dir, normalized) && !isSubpath(workspace.baseDir, normalized)) {
+    const roots = binding === undefined ? [workspace.dir] : [workspace.dir, binding.cwd]
+    if (!roots.some((root) => isSubpath(root, normalized))) {
       throw new CcwError('dir-not-found', `directory is outside workspace ${workspace.id}: ${normalized}`, {
         dir: normalized,
         workspaceId: workspace.id,

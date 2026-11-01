@@ -1116,6 +1116,19 @@ window.__ModuleLoader__.load({
 							value: promptText,
 							placeholder: t('promptPlaceholder'),
 							onChange: (event) => setPromptText(event.target.value),
+							onKeyDown: (event) => {
+								if (event.key === 'Escape') {
+									if (picker !== null) {
+										event.preventDefault()
+										setPicker(null)
+									}
+									return
+								}
+								if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+									event.preventDefault()
+									void sendPrompt()
+								}
+							},
 						}),
 						h('div', { style: styles.panelRow, children: [
 							h('button', { style: styles.button, onClick: () => void openPicker(), children: t('attachFile') }),
