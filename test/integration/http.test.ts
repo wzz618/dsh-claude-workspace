@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createCcwHttpHandler } from '../../src/http.ts'
 import { createService } from '../../src/service.ts'
@@ -22,9 +23,11 @@ interface ApiBody {
   data?: {
     defaultHost?: string
     registryAvailable?: boolean
-    workspace?: { title?: string }
+    workspace?: { id?: string; title?: string; dir?: string }
     workspaces?: unknown[]
     plan?: unknown
+    dir?: string
+    entries?: { name: string; path: string; isDirectory: boolean }[]
   }
   error?: { code?: string }
 }
@@ -59,6 +62,13 @@ test('serves status, creates workspaces, and reports validation errors', async (
 
     const listed = await jsonOf(await fetch(`${http.base}/workspaces`))
     assert.equal(listed.data!.workspaces!.length, 1)
+
+    const workspaceId = created.data!.workspace!.id!
+    const workspaceDir = created.data!.workspace!.dir!
+    await writeFile(join(workspaceDir, 'picked.txt'), 'x')
+    const files = await jsonOf(await fetch(`${http.base}/workspaces/files?workspaceId=${encodeURIComponent(workspaceId)}`))
+    assert.equal(files.data!.dir, workspaceDir)
+    assert.ok(files.data!.entries!.some((entry) => entry.name === 'picked.txt'))
 
     const invalid = await fetch(`${http.base}/workspaces/create`, {
       method: 'POST',

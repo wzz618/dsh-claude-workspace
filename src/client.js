@@ -104,6 +104,13 @@ window.__ModuleLoader__.load({
 			sessionOpened: '会话已打开',
 			diffTruncated: 'diff 过大，仅显示统计',
 			changedLines: '行变更',
+			attachFile: '@ 文件',
+			attachImage: '图片',
+			imageTooLarge: '图片超过 2 MB',
+			imageTooMany: '最多附加 4 张图片',
+			pickerEmpty: '目录为空',
+			pickerTitle: '选择文件',
+			commandsTitle: '命令',
 			hostDefault: '默认',
 			stateRemoved: '已移除',
 			sessionsLabel: '个会话',
@@ -184,6 +191,13 @@ window.__ModuleLoader__.load({
 			sessionOpened: 'Session opened',
 			diffTruncated: 'diff too large; showing counts only',
 			changedLines: 'line changes',
+			attachFile: '@ file',
+			attachImage: 'Image',
+			imageTooLarge: 'Image is larger than 2 MB',
+			imageTooMany: 'At most 4 images',
+			pickerEmpty: 'Directory is empty',
+			pickerTitle: 'Choose a file',
+			commandsTitle: 'Commands',
 			hostDefault: 'default',
 			stateRemoved: 'removed',
 			sessionsLabel: 'sessions',
@@ -232,6 +246,11 @@ window.__ModuleLoader__.load({
 			removeLine: { background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary, #d4380d) 12%, transparent)' },
 			dockCard: { border: '1px solid var(--dsw-alias-state-business-primary, #4b7bec)', borderRadius: '10px', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', background: 'var(--dsw-alias-bg-layer)' },
 			plan: { border: '1px solid var(--dsw-alias-border-l4)', borderRadius: '8px', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' },
+			menu: { display: 'flex', flexDirection: 'column', gap: '2px', border: '1px solid var(--dsw-alias-border-l4)', borderRadius: '8px', padding: '4px', background: 'var(--dsw-alias-bg-layer)', maxHeight: '180px', overflowY: 'auto' },
+			menuItem: { display: 'flex', alignItems: 'baseline', gap: '8px', textAlign: 'left', font: 'inherit', fontSize: '12px', padding: '3px 6px', border: 'none', borderRadius: '6px', background: 'transparent', color: 'inherit', cursor: 'pointer' },
+			picker: { display: 'flex', flexDirection: 'column', gap: '2px', border: '1px solid var(--dsw-alias-border-l4)', borderRadius: '8px', padding: '4px', background: 'var(--dsw-alias-bg-layer)', maxHeight: '220px', overflowY: 'auto' },
+			pickerItem: { textAlign: 'left', font: 'inherit', fontSize: '12px', padding: '3px 6px', border: 'none', borderRadius: '6px', background: 'transparent', color: 'inherit', cursor: 'pointer' },
+			chip: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', padding: '0 6px', borderRadius: '999px', border: '1px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)' },
 			statusDot: { width: '7px', height: '7px', borderRadius: '999px', display: 'inline-block' },
 		}
 
@@ -291,6 +310,61 @@ window.__ModuleLoader__.load({
 			}
 			const location = Array.isArray(toolCall.locations) ? toolCall.locations[0] : undefined
 			return location && typeof location.path === 'string' ? clip(location.path) : ''
+		}
+
+		/** Latest `available_commands_update` payload in an event stream. */
+		function latestCommands(events) {
+			for (let index = events.length - 1; index >= 0; index -= 1) {
+				const event = events[index]
+				if (event !== null && event !== undefined && event.type === 'commands') return event.commands || []
+			}
+			return []
+		}
+
+		/** Commands whose `/name` prefix matches the draft. */
+		function matchCommands(commands, draft) {
+			if (typeof draft !== 'string' || !draft.startsWith('/')) return []
+			const needle = draft.toLowerCase()
+			return (commands || [])
+				.filter((command) => command && typeof command.name === 'string' && `/${command.name}`.toLowerCase().startsWith(needle))
+				.slice(0, 8)
+		}
+
+		/** Path relative to a root directory, or the absolute path when outside it. */
+		function relativeWithin(root, path) {
+			const base = root.replace(/\/+$/, '')
+			if (path === base) return '.'
+			if (path.startsWith(`${base}/`)) return path.slice(base.length + 1)
+			return path
+		}
+
+		/** Parent directory, never above the picker root. */
+		function parentDirectory(directory, root) {
+			const base = root.replace(/\/+$/, '')
+			if (directory === base) return root
+			const parent = directory.replace(/\/+$/, '').replace(/\/[^/]+$/, '')
+			return parent.length < base.length ? root : parent
+		}
+
+		const MAX_IMAGES = 4
+		const MAX_IMAGE_BYTES = 2 * 1024 * 1024
+
+		/** Reads one browser File as an ACP image block payload. */
+		function readImageFile(file) {
+			return new Promise((resolve, reject) => {
+				const reader = new FileReader()
+				reader.onload = () => {
+					const result = typeof reader.result === 'string' ? reader.result : ''
+					const match = /^data:([^;]+);base64,(.*)$/.exec(result)
+					if (match === null) {
+						reject(new Error('unsupported image'))
+						return
+					}
+					resolve({ data: match[2], mimeType: match[1], name: file.name })
+				}
+				reader.onerror = () => reject(new Error('could not read image'))
+				reader.readAsDataURL(file)
+			})
 		}
 
 		function clip(text) {
@@ -554,6 +628,9 @@ window.__ModuleLoader__.load({
 				const [error, setError] = useState('')
 				const [notice, setNotice] = useState('')
 				const [previews, setPreviews] = useState({})
+				const [images, setImages] = useState([])
+				const [imageError, setImageError] = useState('')
+				const [picker, setPicker] = useState(null)
 				const [reviseText, setReviseText] = useState('')
 				const sinceRef = useRef(0)
 				const streamRef = useRef(null)
@@ -649,9 +726,18 @@ window.__ModuleLoader__.load({
 					setSending(true)
 					setError('')
 					try {
-						const result = await post('/sessions/prompt', { dshSessionId: sessionId, text: promptText })
+						const result = await post('/sessions/prompt', {
+							dshSessionId: sessionId,
+							text: promptText,
+							...(images.length > 0
+								? { images: images.map((image) => ({ data: image.data, mimeType: image.mimeType })) }
+								: {}),
+						})
 						setNotice(`${t('turnFinished')}: ${result.stopReason}`)
 						setPromptText('')
+						setImages([])
+						setImageError('')
+						setPicker(null)
 					} catch (failure) {
 						setError(failure.message)
 					} finally {
@@ -682,6 +768,59 @@ window.__ModuleLoader__.load({
 					} finally {
 						setReconnecting(false)
 					}
+				}
+
+				const addImages = async (fileList) => {
+					setImageError('')
+					const files = Array.from(fileList || [])
+					const accepted = []
+					for (const file of files) {
+						if (!file.type || !file.type.startsWith('image/')) continue
+						if (file.size > MAX_IMAGE_BYTES) {
+							setImageError(t('imageTooLarge'))
+							continue
+						}
+						accepted.push(await readImageFile(file))
+					}
+					setImages((current) => {
+						const combined = [...current, ...accepted]
+						if (combined.length > MAX_IMAGES) setImageError(t('imageTooMany'))
+						return combined.slice(0, MAX_IMAGES)
+					})
+				}
+
+				const pickerUrl = (dir) => {
+					const query = new URLSearchParams({ workspaceId, dshSessionId: sessionId })
+					if (dir !== undefined) query.set('dir', dir)
+					return `/workspaces/files?${query.toString()}`
+				}
+
+				const openPicker = async () => {
+					setError('')
+					try {
+						const data = await call(pickerUrl())
+						setPicker({ root: data.dir, dir: data.dir, entries: data.entries || [], loading: false, error: '' })
+					} catch (failure) {
+						setError(failure.message)
+					}
+				}
+
+				const navigatePicker = async (dir) => {
+					setPicker((current) => (current === null ? current : { ...current, loading: true, error: '' }))
+					try {
+						const data = await call(pickerUrl(dir))
+						setPicker((current) => (current === null ? current : {
+							...current, dir: data.dir, entries: data.entries || [], loading: false, error: '',
+						}))
+					} catch (failure) {
+						setPicker((current) => (current === null ? current : { ...current, loading: false, error: failure.message }))
+					}
+				}
+
+				const insertFile = (path) => {
+					const relative = relativeWithin(picker.root, path)
+					setPromptText((text) => `${text}${text.length > 0 && !text.endsWith(' ') ? ' ' : ''}@${relative} `)
+					setPicker(null)
 				}
 
 				const answer = (requestId, optionId) => run(async () => {
@@ -721,6 +860,8 @@ window.__ModuleLoader__.load({
 				const stateLabel = runtime === 'busy' ? t('stateBusy') : runtime === 'disconnected' ? t('stateDisconnected') : runtime === 'ready' ? t('stateReady') : t('stateStopped')
 				const stateColor = runtime === 'busy' ? 'var(--dsw-alias-state-business-primary, #4b7bec)' : runtime === 'disconnected' ? 'var(--dsw-alias-state-error-primary, #d4380d)' : runtime === 'ready' ? 'var(--dsw-alias-state-success-primary, #237804)' : 'var(--dsw-alias-label-tertiary)'
 				const groups = groupEvents(events)
+				const commands = latestCommands(events)
+				const commandMatches = matchCommands(commands, promptText)
 				let sawReplay = false
 				const streamNodes = []
 				for (const item of groups) {
@@ -923,6 +1064,53 @@ window.__ModuleLoader__.load({
 						? []
 						: [h('div', { key: 'dock-title', style: { ...styles.muted, fontSize: '11px' }, children: t('approvals') }), ...dockNodes] }),
 					h('div', { style: styles.composer, children: [
+						commandMatches.length > 0 ? h('div', { style: styles.menu, children: commandMatches.map((command) => h('button', {
+							key: command.name,
+							style: styles.menuItem,
+							onClick: () => setPromptText(`/${command.name} `),
+							children: [
+								h('code', { children: `/${command.name}` }),
+								h('span', { style: { ...styles.muted, fontSize: '11px' }, children: command.description || '' }),
+							],
+						})) }) : null,
+						picker !== null ? h('div', { style: styles.picker, children: [
+							h('div', { style: styles.panelRow, children: [
+								h('button', {
+									style: styles.button,
+									onClick: () => void navigatePicker(parentDirectory(picker.dir, picker.root)),
+									children: '..',
+								}),
+								h('code', { style: { ...styles.code, ...styles.muted, flex: '1 1 auto' }, children: relativeWithin(picker.root, picker.dir) }),
+								h('button', { style: styles.button, onClick: () => setPicker(null), children: t('close') }),
+							] }),
+							picker.loading ? h('div', { style: { ...styles.muted, fontSize: '11px' }, children: '…' }) : null,
+							picker.error ? h('div', { style: styles.error, children: picker.error }) : null,
+							picker.entries.length === 0 && !picker.loading
+								? h('div', { style: { ...styles.muted, fontSize: '11px' }, children: t('pickerEmpty') })
+								: null,
+							...picker.entries.map((entry) => h('button', {
+								key: entry.path,
+								style: styles.pickerItem,
+								onClick: () => {
+									if (entry.isDirectory) void navigatePicker(entry.path)
+									else insertFile(entry.path)
+								},
+								children: `${entry.isDirectory ? '▸ ' : '· '}${entry.name}`,
+							})),
+						].filter(Boolean) }) : null,
+						images.length > 0 ? h('div', { style: styles.panelRow, children: images.map((image, index) => h('span', {
+							key: `${image.name}-${index}`,
+							style: styles.chip,
+							children: [
+								h('span', { children: image.name }),
+								h('button', {
+									style: { font: 'inherit', border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer' },
+									onClick: () => setImages((current) => current.filter((_, position) => position !== index)),
+									children: '×',
+								}),
+							],
+						})) }) : null,
+						imageError ? h('div', { style: { ...styles.muted, fontSize: '11px' }, children: imageError }) : null,
 						h('textarea', {
 							style: styles.textarea,
 							value: promptText,
@@ -930,6 +1118,20 @@ window.__ModuleLoader__.load({
 							onChange: (event) => setPromptText(event.target.value),
 						}),
 						h('div', { style: styles.panelRow, children: [
+							h('button', { style: styles.button, onClick: () => void openPicker(), children: t('attachFile') }),
+							h('label', { style: styles.button, children: [
+								t('attachImage'),
+								h('input', {
+									type: 'file',
+									accept: 'image/*',
+									multiple: true,
+									style: { display: 'none' },
+									onChange: (event) => {
+										void addImages(event.target.files)
+										event.target.value = ''
+									},
+								}),
+							] }),
 							h('button', {
 								style: styles.primary,
 								disabled: busy || sending || running || !opened || runtime === 'disconnected' || promptText.trim().length === 0,
@@ -1040,6 +1242,10 @@ window.__ModuleLoader__.load({
 		exports.groupEvents = groupEvents
 		exports.flattenSelectValues = flattenSelectValues
 		exports.toolInputSummary = toolInputSummary
+		exports.latestCommands = latestCommands
+		exports.matchCommands = matchCommands
+		exports.relativeWithin = relativeWithin
+		exports.parentDirectory = parentDirectory
 		return module.exports
 	},
 })

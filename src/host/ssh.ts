@@ -3,7 +3,8 @@ import { CcwError, tail } from '../util/errors.ts'
 import { LocalHost } from './local.ts'
 import { parseVersion } from './probe.ts'
 import { buildRemoteCommand } from './shell.ts'
-import type { ExecOptions, ExecResult, HostOps, HostProcess, PathInfo, ProbeResult, SpawnOptions, AtomicFileOptions } from './types.ts'
+import type { ExecOptions, ExecResult, HostOps, HostProcess, PathInfo, ProbeResult, SpawnOptions, AtomicFileOptions, DirectoryEntry } from './types.ts'
+import { childPath, compareEntries } from './entries.ts'
 
 /** Options that shape one SSH host invocation. */
 export interface SshHostOptions {
@@ -80,8 +81,31 @@ export class SshHost implements HostOps {
     return result.stdout.trim()
   }
 
-  async readText(path: string): Promise<string | undefined> {
-    const script = 'if [ ! -e "$0" ] && [ ! -L "$0" ]; then exit 3; fi; cat -- "$0"'
+  async listDirectory(path: string, limit = 500): Promise<DirectoryEntry[]> {
+    const script = 'dir=$0; if [ ! -d "$dir" ]; then exit 4; fi; find -- "$dir" -mindepth 1 -maxdepth 1 -printf \'%y\\t%f\\0\''
+    const result = await this.#execRemote(['sh', '-c', script, path])
+    if (result.code === 4) throw new CcwError('dir-not-found', `${path} does not exist on ${this.#options.alias}`, { path })
+    if (result.code !== 0) {
+      throw new CcwError(
+        'host-probe-failed',
+        `could not list ${path} on ${this.#options.alias}: ${tail(result.stderr)}`,
+        { path, host: this.id },
+      )
+    }
+    const entries: DirectoryEntry[] = []
+    for (const record of result.stdout.split('\0')) {
+      if (record.length === 0) continue
+      const tab = record.indexOf('\t')
+      if (tab < 0) continue
+      const type = record.slice(0, tab)
+      const name = record.slice(tab + 1)
+      if (name.length === 0) continue
+      entries.push({ name, path: childPath(path, name), isDirectory: type === 'd' })
+    }
+    return entries.sort(compareEntries).slice(0, Math.max(0, limit))
+  }
+
+  async readText(path: string): Promise<string | undefined> {    const script = 'if [ ! -e "$0" ] && [ ! -L "$0" ]; then exit 3; fi; cat -- "$0"'
     const result = await this.#execRemote(['sh', '-c', script, path])
     if (result.code === 3) return undefined
     if (result.code !== 0) {

@@ -11,7 +11,7 @@
 - **权限**：Claude 给什么选项就展示什么（`allow_once` / `allow-with-updates` / `reject…`），原样回传；额外提供「放宽」：本命令 / 命令前缀 / 本工具。默认审批**永不超时**。
 - **远程**：`ssh -T -o BatchMode=yes -- <alias> claude-agent-acp` 直接承载 stdio，不暴露端口、不写桥、不要求目标机装 DSH。
 - **审计**：`<dataDir>/audit/YYYY-MM-DD.jsonl`，只记元数据（主机、工作区、会话、工具、参数摘要、决定、耗时）；服务启动时按 `audit.retainDays` 清理过期文件。
-- **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、断线重连、历史回放分隔与待审批计数；设置页保留主机/工作区/规则管理。
+- **界面**：DSH 右侧栏新增 `Claude Code` 标签（从右侧栏引导页打开），提供会话流、工具卡、diff、计划卡、权限 Dock、模型/思考强度/模式选择、停止按钮、断线重连、历史回放分隔与待审批计数；composer 支持 `/` 斜杠命令、`@` 文件选择与图片附件；设置页保留主机/工作区/规则管理。
 
 不处理 Claude 登录/凭据：目标机上的 `claude` 必须已经登录。插件不读取、不缓存、不转发任何凭据。
 
@@ -139,6 +139,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 | POST | `/workspaces/rename` | `{workspaceId, title}` |
 | POST | `/workspaces/remove` | `{workspaceId}`，只移除注册，不删目录 |
 | POST | `/workspaces/delete-directory` | `{workspaceId, deleteDirectory:true}`，仅限已移除且派生的目录 |
+| GET | `/workspaces/files` | `?workspaceId=&dir=&dshSessionId=`，`@` 文件选择器的目录列举 |
 | GET | `/sessions` | 会话绑定 |
 | POST | `/sessions/open` | `{workspaceId, dshSessionId, model?, effort?, mode?}` |
 | POST | `/sessions/prompt` | `{dshSessionId, text, images?}` |
@@ -175,7 +176,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ```sh
 npm install
 npm run typecheck      # src + test
-npm test               # 116 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
+npm test               # 122 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
 npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run build          # tsc -> lib/，并复制浏览器半区

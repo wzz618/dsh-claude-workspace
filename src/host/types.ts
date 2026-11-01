@@ -34,6 +34,14 @@ export interface SpawnOptions {
   readonly env?: Readonly<Record<string, string>>
 }
 
+/** One direct child of a host directory. */
+export interface DirectoryEntry {
+  readonly name: string
+  /** Absolute child path. */
+  readonly path: string
+  readonly isDirectory: boolean
+}
+
 /** Durable replacement options for one host file. */
 export interface AtomicFileOptions {
   /** Copies the previous file to `<path>.bak` before replacing it. */
@@ -65,6 +73,8 @@ export interface HostOps {
   stat(path: string): Promise<PathInfo>
   mkdirp(path: string): Promise<void>
   realpath(path: string): Promise<string>
+  /** Lists direct children of a directory, directories first. */
+  listDirectory(path: string, limit?: number): Promise<DirectoryEntry[]>
   /** Reads a text file, or undefined when it does not exist. */
   readText(path: string): Promise<string | undefined>
   /** Replaces a file through a same-directory temporary file and rename. */

@@ -1,11 +1,14 @@
 import { spawn as spawnChild } from 'node:child_process'
-import { mkdir, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { atomicWriteFile } from '../util/atomic.ts'
 import { scrubEnvironment } from '../util/env.ts'
 import { CcwError, tail } from '../util/errors.ts'
+import { compareEntries } from './entries.ts'
 import type {
   AtomicFileOptions,
+  DirectoryEntry,
   ExecOptions,
   ExecResult,
   HostOps,
@@ -56,6 +59,20 @@ export class LocalHost implements HostOps {
 
   async realpath(path: string): Promise<string> {
     return realpath(path)
+  }
+
+  async listDirectory(path: string, limit = 500): Promise<DirectoryEntry[]> {
+    let entries
+    try {
+      entries = await readdir(path, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) throw new CcwError('dir-not-found', `${path} does not exist`, { path })
+      throw new CcwError('host-probe-failed', `could not list ${path}: ${messageOf(error)}`, { path }, { cause: error })
+    }
+    return entries
+      .map((entry) => ({ name: entry.name, path: join(path, entry.name), isDirectory: entry.isDirectory() }))
+      .sort(compareEntries)
+      .slice(0, Math.max(0, limit))
   }
 
   async readText(path: string): Promise<string | undefined> {

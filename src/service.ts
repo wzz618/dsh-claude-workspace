@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
+import { isAbsolute, posix } from 'node:path'
 import type {
   LoadSessionResult,
   PermissionOutcome,
@@ -21,13 +22,14 @@ import { SettingsWriter, settingsTargetPath } from './gate/settings-writer.ts'
 import { findAllowOnce, findAllowWithUpdates, findReject, isHighRiskCommand, normalizeOptionKind } from './gate/options.ts'
 import { buildWidenRules, describeTool, matchesWidenedRule } from './gate/widen.ts'
 import { createHostOps } from './host/index.ts'
-import type { HostOps } from './host/types.ts'
+import type { DirectoryEntry, HostOps } from './host/types.ts'
 import { CcwError, tail } from './util/errors.ts'
 import {
   createWorkspace,
   deleteWorkspaceDirectory,
   deriveSessionDirectory,
   ensureSessionDirectory,
+  isSubpath,
   removeWorkspace,
   renameWorkspace,
   type CreateWorkspaceInput,
@@ -754,6 +756,38 @@ export class CcwService {
   /** Every persisted session binding. */
   async listSessions(): Promise<CcwSessionBinding[]> {
     return this.#sessions.list()
+  }
+
+  /**
+   * Lists one directory inside a workspace for the `@` file picker.
+   *
+   * The directory is constrained to the workspace root or one of its derived
+   * session directories; a caller cannot turn this into arbitrary host listing.
+   *
+   * @param workspaceId - Workspace to browse.
+   * @param options - Starting directory and, when omitted, the session whose cwd is used.
+   * @returns The listed directory and its direct children.
+   */
+  async listWorkspaceDirectory(
+    workspaceId: string,
+    options: { readonly dir?: string; readonly dshSessionId?: string } = {},
+  ): Promise<{ readonly dir: string; readonly entries: readonly DirectoryEntry[] }> {
+    const workspace = await this.#requireWorkspace(workspaceId)
+    const binding = options.dshSessionId === undefined ? undefined : await this.#sessions.get(options.dshSessionId)
+    const root = binding?.cwd ?? workspace.dir
+    const target = options.dir === undefined ? root : options.dir
+    if (!isAbsolute(target)) {
+      throw new CcwError('dir-not-found', `directory must be absolute: ${target}`, { dir: target })
+    }
+    const normalized = posix.normalize(target)
+    if (!isSubpath(workspace.dir, normalized) && !isSubpath(workspace.baseDir, normalized)) {
+      throw new CcwError('dir-not-found', `directory is outside workspace ${workspace.id}: ${normalized}`, {
+        dir: normalized,
+        workspaceId: workspace.id,
+      })
+    }
+    const host = this.#host(workspace.hostId)
+    return { dir: normalized, entries: await host.listDirectory(normalized, 500) }
   }
 
   /** Reads one day's audit entries. */

@@ -146,6 +146,8 @@ async function main(): Promise<void> {
     const written = await host.exec(['cat', '--', allowFile])
     assert.equal(written.code, 0, `could not read ${allowFile}: ${written.stderr.trim()}`)
     assert.equal(written.stdout.trim(), 'ssh-e2e')
+    const listed = await service.listWorkspaceDirectory(workspace.workspace.id, { dshSessionId: 'remote-1' })
+    assert.ok(listed.entries.some((entry) => entry.name === 'ccw-e2e-ssh-allow.txt'))
 
     log('scenario: remote write rejected')
     const rejectTurn = await runPrompt(

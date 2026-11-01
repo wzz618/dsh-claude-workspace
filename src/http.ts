@@ -14,6 +14,7 @@ export const CCW_HTTP_PATHS = [
   '/api/dsh-claude-workspace/workspaces/rename',
   '/api/dsh-claude-workspace/workspaces/remove',
   '/api/dsh-claude-workspace/workspaces/delete-directory',
+  '/api/dsh-claude-workspace/workspaces/files',
   '/api/dsh-claude-workspace/sessions',
   '/api/dsh-claude-workspace/sessions/open',
   '/api/dsh-claude-workspace/sessions/prompt',
@@ -137,6 +138,13 @@ async function dispatch(
         deleteDirectory: body?.deleteDirectory === true,
       })
       return { deleted: true }
+    case 'GET /api/dsh-claude-workspace/workspaces/files':
+      return service.listWorkspaceDirectory(requiredString(url.searchParams, 'workspaceId'), {
+        ...(url.searchParams.get('dir') === null ? {} : { dir: requiredString(url.searchParams, 'dir') }),
+        ...(url.searchParams.get('dshSessionId') === null
+          ? {}
+          : { dshSessionId: requiredString(url.searchParams, 'dshSessionId') }),
+      })
     case 'GET /api/dsh-claude-workspace/sessions':
       return { sessions: await service.listSessions() }
     case 'POST /api/dsh-claude-workspace/sessions/open':

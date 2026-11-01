@@ -31,6 +31,10 @@ class MemoryHost implements HostOps {
     return path
   }
 
+  async listDirectory(): Promise<never[]> {
+    return []
+  }
+
   async readText(path: string): Promise<string | undefined> {
     return this.files.get(path)?.content
   }

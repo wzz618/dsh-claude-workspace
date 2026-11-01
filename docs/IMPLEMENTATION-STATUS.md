@@ -12,7 +12,7 @@
 | P1 工作区与本地会话 | **本轮完成（核心）** | 工作区模型/目录派生/登记、HostOps（local+ssh）、ACP 进程池、会话绑定、权限门（永不超时/如实转发/放宽）、审计、恢复、HTTP 控制面。 |
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
 | P3 远程 | **P3a/P3b 完成，跨机待验证** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写；断线标记、pending 过期审计、`sessions/reconnect` 与控制台重连按钮。localhost SSH 真机 PASS；**独立物理机尚未验证。** |
-| P4 细节对齐 | 未开始 | 会话树、子 agent、斜杠命令、@ 文件、图片 UI、模型/effort 选择器（API 已有）。 |
+| P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
 | P5 硬化 | 部分 | 原子写、审计、审计保留、行/输出上限；未做打包发布、兼容矩阵 CI。 |
 
 ## §12.3 实现顺序对照
@@ -28,7 +28,7 @@
 
 ## 已验证行为（自动化）
 
-`npm test`：116 个用例全部通过。
+`npm test`：122 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -115,6 +115,27 @@
 
 剩余：真实 SSH 断网/杀进程回归、跨物理机。
 
+## P2b Q8 spike（2026-11-01）
+
+在隔离 web profile 中加载 `@zaimokuza/dsh-acp-adapter@0.1.0-rc.10`（DSH 0.2.1-rc.5）：
+
+- `--dump-config` 正确禁用 `agent-loop` / `ui-model-selection`，并插入 `agent-loop-acp`
+- 启动失败：`@deepseek-ai/dsh-llm` 不再导出 `CallId`
+- 把该符号改为 `ToolCallId` 后，下一处失败：`@deepseek-ai/dsh-agent` 不再导出 `Inbox`（0.2.x 改为 driver-owned `ReactLoopInbox`，且未从包入口导出）
+- 适配器的 `host-compat` 仍绑定 0.1.1-rc.2 的私有 `initializeAgent`/发布流程
+
+结论：**不能直接复用该适配器**。P2b 若要继续，需要 fork 并迁移 LLM 工厂、Inbox 实现与 host-compat；这是一次独立且较大的工作。本轮暂缓 P2b，优先完成 P4 的 composer 能力与 P5 硬化。
+
+## P4a composer（2026-11-01）
+
+- **`/` 斜杠命令**：读取最新的 `available_commands_update`，按前缀过滤后显示菜单，点击写入 `/<name> `
+- **`@` 文件选择**：新增 `GET /workspaces/files`；目录限定在工作区根或派生会话目录内，返回目录优先排序的直接子项；选择文件写入相对路径 `@path`
+- **图片附件**：选择图片后转 base64 作为 ACP image block，最多 4 张、每张 ≤2 MB；发送后清空
+- Host 新增 `listDirectory`（local `readdir`；SSH `find -printf '%y\t%f\0'`），并修正了远程脚本 `$0/$1` 传参问题
+- 验证：单元/HTTP 用例覆盖排序、限制、越界拒绝、命令匹配、路径相对化；SSH host 冒烟验证目录列举、原子写、读取、home、删除；`test:real:ssh` 增加“列举远端工作区并找到刚写入文件”的断言
+
+剩余 P4：子 agent 会话树、图片压缩与预算、`@` 与 DSH 文件索引的一致、快捷键。
+
 ### DSH Loader 装配（隔离环境）
 
 在临时 `DSH_HOME=/tmp/ccw-dsh-home` 下执行（未触碰 `~/.dsh`，验证后已删除）：
@@ -148,7 +169,7 @@ DSH_HOME=/tmp/ccw-dsh-home pnpm dsh --profile ccwtest --dump-config
 
 | 编号 | 本轮结论 |
 |---|---|
-| Q8 | 不 fork，独立实现（见上）；P2 前做一次 agent-loop 接管的 spike 决定复用还是自写 ACP agent 适配层。 |
+| Q8 | 已做 spike：适配器 rc.10 在 DSH 0.2.1-rc.5 上因 `CallId`/`Inbox` 移除而无法加载，host-compat 绑定旧私有结构；直接复用不可行，P2b 需 fork+迁移或自写桥。 |
 | Q9 | 只实现 ACP v1；v2 未评估。 |
 | Q11 | 已在 `#load` 后重新应用 `model`/`effort`/`mode`；真机已执行「设为 default → 重启 load → 重设无报错，回放 31 条」，但因 ACP 无读取当前模型的接口，未直接断言加载后的实际模型值。 |
 | Q12 | 自动放行写审计 `auto:<rule>`；真机确认取消后卡片保持 `cancelled`。UI 的 auto 徽标仍待 P2。 |

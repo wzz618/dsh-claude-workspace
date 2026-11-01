@@ -40,6 +40,10 @@ const mergeEvents = client.mergeEvents as (a: unknown[], b: unknown[], n: number
 const groupEvents = client.groupEvents as (a: unknown[]) => unknown[]
 const flattenSelectValues = client.flattenSelectValues as (a: unknown[]) => { value: string; name: string }[]
 const toolInputSummary = client.toolInputSummary as (a: unknown) => string
+const latestCommands = client.latestCommands as (events: unknown[]) => { name: string; description?: string }[]
+const matchCommands = client.matchCommands as (commands: unknown[], draft: string) => { name: string }[]
+const relativeWithin = client.relativeWithin as (root: string, path: string) => string
+const parentDirectory = client.parentDirectory as (directory: string, root: string) => string
 
 test('the module registers under the client id and exports the plugin shape', () => {
   assert.equal(captured?.id, 'dsh-claude-workspace')
@@ -88,6 +92,33 @@ test('toolInputSummary prefers command, then path, then URL, and clips long valu
   assert.equal(toolInputSummary({ locations: [{ path: '/w/b.ts' }] }), '/w/b.ts')
   assert.equal(toolInputSummary({ rawInput: { command: 'x'.repeat(400) } }).length, 220)
   assert.equal(toolInputSummary(null), '')
+})
+
+test('latestCommands reads the newest commands event', () => {
+  const commands = [{ name: 'compact', description: 'Compact' }]
+  assert.deepEqual(latestCommands([
+    { type: 'commands', seq: 1, commands: [{ name: 'old' }] },
+    { type: 'assistant-text', seq: 2 },
+    { type: 'commands', seq: 3, commands },
+  ]), commands)
+  assert.deepEqual(latestCommands([]), [])
+})
+
+test('matchCommands filters slash commands by prefix', () => {
+  const commands = [{ name: 'compact' }, { name: 'clear' }, { name: 'review' }]
+  assert.deepEqual(matchCommands(commands, '/c').map((command) => command.name), ['compact', 'clear'])
+  assert.deepEqual(matchCommands(commands, '/re').map((command) => command.name), ['review'])
+  assert.deepEqual(matchCommands(commands, 'hello'), [])
+  assert.deepEqual(matchCommands(commands, '/z'), [])
+})
+
+test('relativeWithin and parentDirectory stay under the picker root', () => {
+  assert.equal(relativeWithin('/w/project', '/w/project/src/a.ts'), 'src/a.ts')
+  assert.equal(relativeWithin('/w/project', '/w/project'), '.')
+  assert.equal(relativeWithin('/w/project', '/elsewhere/a.ts'), '/elsewhere/a.ts')
+  assert.equal(parentDirectory('/w/project/src/deep', '/w/project'), '/w/project/src')
+  assert.equal(parentDirectory('/w/project', '/w/project'), '/w/project')
+  assert.equal(parentDirectory('/w/project/src', '/w/project'), '/w/project')
 })
 
 test('apply registers the settings section and the right-sidebar tab type', () => {
