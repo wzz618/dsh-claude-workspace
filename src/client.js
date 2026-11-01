@@ -84,6 +84,7 @@ window.__ModuleLoader__.load({
 			send: '发送',
 			sending: '发送中…',
 			promptPlaceholder: '描述要在这个工作区完成的任务…',
+			sendHint: 'Enter 发送，Shift+Enter 换行',
 			replayHistory: '历史回放',
 			thinking: '思考',
 			noEvents: '还没有消息。',
@@ -177,6 +178,7 @@ window.__ModuleLoader__.load({
 			send: 'Send',
 			sending: 'Sending…',
 			promptPlaceholder: 'Describe the task for this workspace…',
+			sendHint: 'Enter sends; Shift+Enter inserts a newline',
 			replayHistory: 'History replay',
 			thinking: 'Thinking',
 			noEvents: 'No messages yet.',
@@ -343,6 +345,13 @@ window.__ModuleLoader__.load({
 				else if (Array.isArray(entry.options)) values.push(...flattenSelectValues(entry.options))
 			}
 			return values
+		}
+
+		/** Enter sends; Shift+Enter inserts a newline; IME composition never sends. */
+		function isSendShortcut(event) {
+			if (event === null || event === undefined || event.key !== 'Enter') return false
+			if (event.isComposing === true || event.keyCode === 229) return false
+			return event.shiftKey !== true && event.altKey !== true
 		}
 
 		/** Whether a persisted binding can be resumed in this Host process. */
@@ -1130,6 +1139,7 @@ window.__ModuleLoader__.load({
 
 				const sendPrompt = async () => {
 					if (running || sending) return
+					if (promptText.trim().length === 0 && images.length === 0) return
 					setSending(true)
 					setError('')
 					try {
@@ -1558,6 +1568,7 @@ window.__ModuleLoader__.load({
 							style: styles.textarea,
 							value: promptText,
 							placeholder: t('promptPlaceholder'),
+							title: t('sendHint'),
 							onChange: (event) => setPromptText(event.target.value),
 							onKeyDown: (event) => {
 								if (event.key === 'Escape') {
@@ -1567,7 +1578,7 @@ window.__ModuleLoader__.load({
 									}
 									return
 								}
-								if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+								if (isSendShortcut(event)) {
 									event.preventDefault()
 									void sendPrompt()
 								}
@@ -1697,6 +1708,7 @@ window.__ModuleLoader__.load({
 		exports.mergeEvents = mergeEvents
 		exports.groupEvents = groupEvents
 		exports.collectToolCards = collectToolCards
+		exports.isSendShortcut = isSendShortcut
 		exports.needsResume = needsResume
 		exports.renderMarkdownNodes = renderMarkdownNodes
 		exports.MAX_MARKDOWN_CHARS = MAX_MARKDOWN_CHARS

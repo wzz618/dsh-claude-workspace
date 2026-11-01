@@ -321,3 +321,16 @@ test('short GFM delimiter rows still start a table', () => {
   assert.equal(blocks[0]!.type, 'table')
   assert.deepEqual(blocks[0]!.rows, [['1', '2']])
 })
+
+const isSendShortcut = client.isSendShortcut as (event: Record<string, unknown>) => boolean
+
+test('Enter sends, Shift+Enter and IME composition do not', () => {
+  assert.equal(isSendShortcut({ key: 'Enter' }), true)
+  assert.equal(isSendShortcut({ key: 'Enter', ctrlKey: true }), true)
+  assert.equal(isSendShortcut({ key: 'Enter', metaKey: true }), true)
+  assert.equal(isSendShortcut({ key: 'Enter', shiftKey: true }), false)
+  assert.equal(isSendShortcut({ key: 'Enter', altKey: true }), false)
+  assert.equal(isSendShortcut({ key: 'Enter', isComposing: true }), false)
+  assert.equal(isSendShortcut({ key: 'Enter', keyCode: 229 }), false)
+  assert.equal(isSendShortcut({ key: 'a' }), false)
+})
