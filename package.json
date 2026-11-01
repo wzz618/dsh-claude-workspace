@@ -37,7 +37,8 @@
     "test": "node --test test/unit/*.test.ts test/integration/*.test.ts",
     "test:unit": "node --test test/unit/*.test.ts",
     "test:integration": "node --test test/integration/*.test.ts",
-    "test:real": "node test/real/real-acp.ts"
+    "test:real": "node test/real/real-acp.ts",
+    "test:real:ssh": "node test/real/real-ssh.ts"
   },
   "keywords": [
     "deepseek-harness",

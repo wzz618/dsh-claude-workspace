@@ -175,6 +175,7 @@ npm install
 npm run typecheck      # src + test
 npm test               # 99 个用例：单元 + 假 ACP 集成 + HTTP + 入口
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
+npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run build          # tsc -> lib/，并复制浏览器半区
 ```
 
@@ -182,7 +183,9 @@ npm run build          # tsc -> lib/，并复制浏览器半区
 
 `test/real/real-acp.ts` 在已登录的目标机上驱动真实 `claude-agent-acp`，覆盖：健康检查（握手 + 建会话）、允许、拒绝、`Edit(sub/**)` 放宽与撤销、转发「don't ask again」（Bash 会写带 `\(` 转义的规则）、执行中取消、`session/load` 回放与模型重设、重启恢复。默认使用 `claude-code-test` 目录，可用 `CCW_REAL_CWD` 与 `CCW_ACP_BIN` 覆盖；测试结束后恢复/删除它创建的文件，不触碰 `.claude/settings.json`。
 
-最近一次真机结果（本机，Claude Code 2.1.314 / claude-agent-acp 0.99.1 / Node 24）：全部场景 PASS，`session/load` 回放 31 条事件。
+最近一次真机结果（本机，Claude Code 2.1.314 / claude-agent-acp 0.99.1 / Node 24）：本地与 SSH（localhost）全部场景 PASS，`session/load` 回放 31 条事件。
+
+**另一台机器如何测试**：完整的环境检查、代码传输、R1–R4 验收矩阵、证据回传与失败排查见 [docs/TEST-PLAN.md](docs/TEST-PLAN.md)。
 
 ## 目录结构
 
