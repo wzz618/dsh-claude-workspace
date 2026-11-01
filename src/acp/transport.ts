@@ -1,11 +1,20 @@
 import type { HostOps, HostProcess } from '../host/types.ts'
 import { tail } from '../util/errors.ts'
+import { RollingLogSink } from '../util/log-sink.ts'
+
+export interface AcpLogTarget {
+  readonly path: string
+  readonly maxBytes: number
+  readonly files: number
+}
 
 export interface AcpProcessOptions {
   /** Bytes of stderr retained for diagnostics. */
   readonly stderrLimitBytes?: number
   /** Process working directory; local hosts use it to find project settings. */
   readonly cwd?: string
+  /** Durable stderr log with rotation, written on the DSH host. */
+  readonly log?: AcpLogTarget
 }
 
 /**
@@ -18,18 +27,23 @@ export interface AcpProcessOptions {
 export class AcpProcess {
   readonly #process: HostProcess
   readonly #stderrLimit: number
+  readonly #log: RollingLogSink | undefined
   #stderr = Buffer.alloc(0)
   #stopping = false
 
   constructor(process: HostProcess, options: AcpProcessOptions = {}) {
     this.#process = process
     this.#stderrLimit = options.stderrLimitBytes ?? 8192
+    this.#log = options.log === undefined
+      ? undefined
+      : new RollingLogSink(options.log.path, { maxBytes: options.log.maxBytes, files: options.log.files })
     process.stderr.on('data', (chunk: Buffer | string) => {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
       const combined = Buffer.concat([this.#stderr, bytes])
       this.#stderr = combined.byteLength > this.#stderrLimit
         ? combined.subarray(combined.byteLength - this.#stderrLimit)
         : combined
+      void this.#log?.append(bytes.toString('utf8')).catch(() => undefined)
     })
   }
 

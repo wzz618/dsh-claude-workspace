@@ -196,6 +196,7 @@ export class CcwService {
       requestTimeoutMs: this.#config.acp.requestTimeoutMs,
       promptTimeoutMs: this.#config.acp.promptTimeoutMs,
       idleRecycleMs: this.#config.acp.idleRecycleMs,
+      log: this.#config.logs,
       onSessionUpdate: (workspaceId, sessionId, update) => this.#onSessionUpdate(workspaceId, sessionId, update),
       onPermission: (workspaceId, params) => this.#onPermission(workspaceId, params),
       onDisconnect: (workspaceId) => {

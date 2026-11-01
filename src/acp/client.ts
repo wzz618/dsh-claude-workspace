@@ -26,6 +26,8 @@ export interface AcpClientOptions {
   readonly requestTimeoutMs: number
   /** 0 disables the prompt timeout. */
   readonly promptTimeoutMs: number
+  /** Rotating stderr log written on the DSH host. */
+  readonly log?: { readonly path: string; readonly maxBytes: number; readonly files: number }
   readonly onSessionUpdate: (sessionId: string, update: SessionUpdate) => void
   readonly onPermission: (params: RequestPermissionParams) => Promise<PermissionOutcome>
   readonly onClose: (reason: CloseReason) => void
@@ -72,7 +74,10 @@ export class AcpClient {
    * @throws {CcwError} When the process fails to start or the protocol version differs.
    */
   static async start(host: HostOps, options: AcpClientOptions, processCwd?: string): Promise<AcpClient> {
-    const process = await startAcpProcess(host, processCwd === undefined ? {} : { cwd: processCwd })
+    const process = await startAcpProcess(host, {
+      ...(processCwd === undefined ? {} : { cwd: processCwd }),
+      ...(options.log === undefined ? {} : { log: options.log }),
+    })
     const client = new AcpClient(process, options)
     try {
       await client.#initialize()

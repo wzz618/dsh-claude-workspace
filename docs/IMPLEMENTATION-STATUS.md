@@ -13,7 +13,7 @@
 | P2 呈现层 | **P2a 完成，P2b 待做** | 右侧栏 `Claude Code` 控制台：会话流、工具卡、diff、计划卡、权限 Dock、模型/effort/mode、停止、回放分隔、待审批计数；真实 Web profile 验证通过。**未**接管 `agent-loop` / `ui-model-selection`，因此仍不是 DSH 会话内联呈现。 |
 | P3 远程 | **P3a/P3b 完成，跨机待验证** | `HostOps` ssh、`ssh -T` stdio、keepalive、探测、远端建目录、远端设置读取与原子写；断线标记、pending 过期审计、`sessions/reconnect` 与控制台重连按钮。localhost SSH 真机 PASS；**独立物理机尚未验证。** |
 | P4 细节对齐 | **P4a 完成，其余待做** | composer 已支持 `/` 斜杠命令、`@` 文件选择（Host 目录列举，限定在工作区内）、图片附件（≤4 张、每张 ≤2 MB）；计划卡与模型选择已在前序完成。子 agent 会话树、图片压缩、快捷键仍待做。 |
-| P5 硬化 | 部分 | 原子写、审计、审计保留、行/输出上限；未做打包发布、兼容矩阵 CI。 |
+| P5 硬化 | **P5a 完成，发布待做** | 原子写、审计与保留清理、行/输出上限、ACP stderr 滚动日志（`logs.maxBytes`/`logs.files`）、`prepack` 自动构建；未做发布、CI 矩阵、安装/卸载残留自动检查。 |
 
 ## §12.3 实现顺序对照
 
@@ -28,7 +28,7 @@
 
 ## 已验证行为（自动化）
 
-`npm test`：122 个用例全部通过。
+`npm test`：129 个用例全部通过。
 
 - 工作区：派生命名（摘要稳定、`a:b` vs `a-b`、100 字符、前缀校验）、显式目录、重复目录解析、登记失败不留记录且保留目录、移除不删目录、派生目录删除的包含性校验、`per-session` 派生。
 - Host：POSIX 引号（空格/单引号/`$()`/通配/中文）、ssh argv（BatchMode/keepalive/`--`）、严格主机密钥开关。
@@ -135,6 +135,15 @@
 - 验证：单元/HTTP 用例覆盖排序、限制、越界拒绝、命令匹配、路径相对化；SSH host 冒烟验证目录列举、原子写、读取、home、删除；`test:real:ssh` 增加“列举远端工作区并找到刚写入文件”的断言
 
 剩余 P4：子 agent 会话树、图片压缩与预算、`@` 与 DSH 文件索引的一致、快捷键。
+
+## P5a 硬化（2026-11-01）
+
+- **ACP stderr 滚动日志**：`logs.dir` / `logs.maxBytes`（默认 10 MB）/ `logs.files`（默认 3，含当前文件），按 `<dataDir>/logs/<workspaceId>.log` 写入，`.1` 最新；写入失败不影响会话
+- **审计保留**：服务启动时按 `audit.retainDays` 清理
+- **发布前构建**：`package.json` 增加 `prepack: npm run build`，避免发布包缺 `lib/`
+- 单测覆盖：滚动/单文件/超大单块、日志配置默认值与越界、PlanGate 记录与决策
+
+剩余 P5：CI 兼容矩阵、安装/卸载残留自动检查、日志内容脱敏策略复核、正式发布。
 
 ### DSH Loader 装配（隔离环境）
 

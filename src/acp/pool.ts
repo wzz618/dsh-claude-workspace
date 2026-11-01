@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import type { HostOps } from '../host/types.ts'
 import { SerialQueue } from '../util/queue.ts'
 import { AcpClient } from './client.ts'
@@ -14,6 +15,8 @@ export interface AcpPoolOptions {
   readonly promptTimeoutMs: number
   /** 0 disables idle recycling. */
   readonly idleRecycleMs: number
+  /** Rotating stderr log directory on the DSH host. */
+  readonly log?: { readonly dir: string; readonly maxBytes: number; readonly files: number }
   readonly onSessionUpdate: (workspaceId: string, sessionId: string, update: SessionUpdate) => void
   readonly onPermission: (workspaceId: string, params: RequestPermissionParams) => Promise<PermissionOutcome>
   readonly onDisconnect: (workspaceId: string, reason: CloseReason) => void
@@ -77,6 +80,9 @@ export class AcpPool {
         handshakeTimeoutMs: this.#options.handshakeTimeoutMs,
         requestTimeoutMs: this.#options.requestTimeoutMs,
         promptTimeoutMs: this.#options.promptTimeoutMs,
+        ...(this.#options.log === undefined
+          ? {}
+          : { log: { ...this.#options.log, path: join(this.#options.log.dir, `${workspaceId}.log`) } }),
         onSessionUpdate: (sessionId, update) => this.#options.onSessionUpdate(workspaceId, sessionId, update),
         onPermission: (params) => this.#options.onPermission(workspaceId, params),
         onClose: (reason) => {

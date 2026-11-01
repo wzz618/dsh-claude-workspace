@@ -78,6 +78,10 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
             confirmUserScope: true
         audit:
           retainDays: 30
+        logs:
+          dir: '${DSH_HOME}/claude-code/logs'
+          maxBytes: 10485760          # 10 MB
+          files: 3                    # 当前文件 + .1 + .2
         ssh:
           connectTimeoutMs: 8000
           serverAliveIntervalSec: 15
@@ -94,7 +98,8 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ├── workspaces.json            # 工作区记录（原子写）
 ├── sessions.json              # dshSessionId ↔ acpSessionId 绑定
 ├── written-rules.json         # 仅本插件写入的 allow 规则（可逐条撤销）
-└── audit/YYYY-MM-DD.jsonl
+├── audit/YYYY-MM-DD.jsonl
+└── logs/<workspaceId>.log     # ACP stderr，按 maxBytes 滚动（.1、.2）
 
 <baseDir>/<prefix><可读标识>-<16 位摘要>/
 ```
@@ -176,7 +181,7 @@ dsh plugin --profile web add /root/autodl-tmp/code/wangzhengzhuo512/dsh-claude-w
 ```sh
 npm install
 npm run typecheck      # src + test
-npm test               # 122 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
+npm test               # 129 个用例：单元 + 假 ACP 集成 + HTTP + 入口 + 客户端
 npm run test:real      # 真机端到端（需要已登录的 Claude Code）
 npm run test:real:ssh  # SSH 真机端到端（见 docs/TEST-PLAN.md）
 npm run build          # tsc -> lib/，并复制浏览器半区

@@ -76,3 +76,12 @@ test('version boundaries must be ordered', () => {
     /minimumVersion must be lower/,
   )
 })
+
+test('log rotation defaults live under the data directory', () => {
+  const config = resolveConfig({}, { DSH_HOME: '/tmp/dsh-home' })
+  assert.equal(config.logs.dir, '/tmp/dsh-home/claude-code/logs')
+  assert.equal(config.logs.maxBytes, 10 * 1024 * 1024)
+  assert.equal(config.logs.files, 3)
+  assert.throws(() => resolveConfig({ logs: { files: 11 } }), /logs.files must be 10 or fewer/)
+  assert.throws(() => resolveConfig({ logs: { maxBytes: 1 } }), /logs.maxBytes/)
+})

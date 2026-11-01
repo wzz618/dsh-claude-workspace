@@ -74,6 +74,11 @@ export interface ResolvedConfig {
     readonly dir: string
     readonly retainDays: number
   }
+  readonly logs: {
+    readonly dir: string
+    readonly maxBytes: number
+    readonly files: number
+  }
   readonly ssh: {
     readonly connectTimeoutMs: number
     readonly serverAliveIntervalSec: number
@@ -123,6 +128,11 @@ export interface CcwConfigInput {
   audit?: {
     dir?: string
     retainDays?: number
+  }
+  logs?: {
+    dir?: string
+    maxBytes?: number
+    files?: number
   }
   ssh?: {
     connectTimeoutMs?: number
@@ -174,7 +184,7 @@ const PREFIX_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.ProcessEnv = process.env): ResolvedConfig {
   const issues: string[] = []
   const raw = isRecord(input) ? input : {}
-  rejectUnknownKeys(raw, ['dataDir', 'hosts', 'defaultHost', 'workspaces', 'acp', 'events', 'approvals', 'permissions', 'audit', 'ssh'], 'config', issues)
+  rejectUnknownKeys(raw, ['dataDir', 'hosts', 'defaultHost', 'workspaces', 'acp', 'events', 'approvals', 'permissions', 'audit', 'logs', 'ssh'], 'config', issues)
 
   const home = env.DSH_HOME && env.DSH_HOME.length > 0 ? env.DSH_HOME : join(homedir(), '.dsh')
   const dataDir = pathField(raw.dataDir, join(home, 'claude-code'), 'dataDir', env, issues)
@@ -245,6 +255,13 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
     dir: pathField(auditRaw.dir, join(dataDir, 'audit'), 'audit.dir', env, issues),
     retainDays: numberField(auditRaw.retainDays, 30, 'audit.retainDays', issues, 1),
   }
+  const logsRaw = section(raw.logs, ['dir', 'maxBytes', 'files'], 'logs', issues)
+  const logsConfig = {
+    dir: pathField(logsRaw.dir, join(dataDir, 'logs'), 'logs.dir', env, issues),
+    maxBytes: numberField(logsRaw.maxBytes, 10 * 1024 * 1024, 'logs.maxBytes', issues, 4096),
+    files: numberField(logsRaw.files, 3, 'logs.files', issues, 1),
+  }
+  if (logsConfig.files > 10) issues.push('logs.files must be 10 or fewer')
 
   if (issues.length > 0) throw new CcwConfigError(issues)
 
@@ -272,6 +289,7 @@ export function resolveConfig(input: CcwConfigInput | undefined, env: NodeJS.Pro
       },
     },
     audit: auditConfig,
+    logs: logsConfig,
     ssh: sshConfig,
   }
 }
