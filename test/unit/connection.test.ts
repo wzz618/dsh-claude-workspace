@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough } from 'node:stream'
 import { AcpConnection, type CloseReason } from '../../src/acp/connection.ts'
+import { keepAlive } from '../helpers/temp.ts'
 
 interface Harness {
   connection: AcpConnection
@@ -121,7 +122,7 @@ test('closing rejects a pending request with a timeout or disconnect', async () 
   const h = harness()
   const pending = h.connection.request('session/prompt', {}, 20)
   await h.receive()
-  await assert.rejects(pending, /timed out|closed/)
+  await assert.rejects(keepAlive(pending), /timed out|closed/)
   h.connection.dispose()
 })
 

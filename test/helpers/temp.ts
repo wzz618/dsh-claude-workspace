@@ -36,3 +36,17 @@ export async function waitForAsync<T>(
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
 }
+
+/**
+ * Keep the event loop alive while awaiting a promise whose only wakeup is an
+ * unref'd timer. Node 22's test runner otherwise cancels the test when the
+ * loop drains before that timer fires.
+ */
+export async function keepAlive<T>(promise: Promise<T>): Promise<T> {
+  const timer = setInterval(() => undefined, 1000)
+  try {
+    return await promise
+  } finally {
+    clearInterval(timer)
+  }
+}

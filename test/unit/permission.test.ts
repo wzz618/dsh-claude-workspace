@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PermissionGate } from '../../src/gate/permission.ts'
 import type { PermissionOption } from '../../src/acp/types.ts'
+import { keepAlive } from '../helpers/temp.ts'
 
 const options: PermissionOption[] = [
   { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
@@ -63,7 +64,7 @@ test('expiring resolves with a reason and keeps history', async () => {
 test('configured timeouts expire the request', async () => {
   const gate = new PermissionGate({ timeoutMs: 10 })
   const decision = request(gate)
-  const result = await decision
+  const result = await keepAlive(decision)
   assert.equal(result.kind, 'expired')
   assert.match(result.kind === 'expired' ? result.reason : '', /timed out/)
   assert.equal(gate.pending().length, 0)
