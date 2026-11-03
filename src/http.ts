@@ -21,6 +21,8 @@ export const CCW_HTTP_PATHS = [
   '/api/dsh-claude-workspace/sessions/prompt',
   '/api/dsh-claude-workspace/sessions/cancel',
   '/api/dsh-claude-workspace/sessions/reconnect',
+  '/api/dsh-claude-workspace/sessions/refresh',
+  '/api/dsh-claude-workspace/sessions/release',
   '/api/dsh-claude-workspace/sessions/option',
   '/api/dsh-claude-workspace/sessions/options',
   '/api/dsh-claude-workspace/sessions/reattach',
@@ -178,6 +180,10 @@ async function dispatch(
       return { cancelled: true }
     case 'POST /api/dsh-claude-workspace/sessions/reconnect':
       return service.reconnectSession(requiredString(body, 'dshSessionId'))
+    case 'POST /api/dsh-claude-workspace/sessions/refresh':
+      return service.refreshSession(requiredString(body, 'dshSessionId'))
+    case 'POST /api/dsh-claude-workspace/sessions/release':
+      return service.releaseWorkspace(requiredString(body, 'workspaceId'))
     case 'POST /api/dsh-claude-workspace/sessions/option':
       return {
         binding: await service.setOption(

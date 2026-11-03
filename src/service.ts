@@ -80,6 +80,8 @@ export interface OpenSessionResult {
   readonly resumed: boolean
   /** True when the stored ACP session could not be reloaded and a fresh one replaced it. */
   readonly replaced?: boolean
+  /** True when history was replayed from the agent's current session log. */
+  readonly refreshed?: boolean
   readonly modes?: SessionModeState
   readonly configOptions: readonly SessionConfigOption[]
 }
@@ -494,6 +496,12 @@ export class CcwService {
     try {
       if (existing !== undefined && existing.acpSessionId !== undefined) {
         this.#remember(existing, input.dshSessionId)
+        // The agent's session log is shared with any CLI that resumes the same
+        // id. Entering the console after an external write reloads history
+        // instead of continuing from stale in-memory context.
+        if (!this.#runningOf(input.dshSessionId).running && await this.#revisionChanged(existing)) {
+          return await this.#reloadConsole(client, existing, input)
+        }
         if (!client.hasSession(existing.acpSessionId)) {
           try {
             await this.#load(client, existing)
@@ -607,11 +615,13 @@ export class CcwService {
         const cancelled = result.stopReason === 'cancelled'
         if (cancelled) this.#emitTranslator(this.#translatorFor(input.dshSessionId).markCancelled(), input.dshSessionId)
         const seq = this.#sequences.get(input.dshSessionId) ?? binding.lastEventSeq
+        const revision = await this.#readRevision(binding)
         await this.#sessions.update(input.dshSessionId, {
           lastTurnAt: this.#now(),
           lastEventSeq: seq,
           needsLoad: false,
           ...(binding.model === undefined ? {} : { model: binding.model }),
+          ...(revision === undefined ? {} : { revision }),
         })
         await this.#auditDecision({
           workspace,
@@ -1008,6 +1018,113 @@ export class CcwService {
     return this.#ensureTranslator(dshSessionId, `pending:${dshSessionId}`, this.#sequences.get(dshSessionId) ?? 0)
   }
 
+  /**
+   * Opaque revision of the agent's on-disk session log (mtime and size).
+   *
+   * Both DSH and a CLI resuming the same Claude session append to this file;
+   * comparing the revision at entry detects writes made by the other process.
+   */
+  async #readRevision(binding: CcwSessionBinding): Promise<string | undefined> {
+    if (binding.acpSessionId === undefined || !/^[A-Za-z0-9-]+$/.test(binding.acpSessionId)) return undefined
+    const workspace = await this.#workspaces.get(binding.workspaceId).catch(() => undefined)
+    if (workspace === undefined) return undefined
+    try {
+      const result = await this.#host(workspace.hostId).exec([
+        'sh', '-c',
+        'find "$HOME/.claude/projects" -maxdepth 2 -type f -name "$1.jsonl" -printf "%T@ %s\n" 2>/dev/null | head -n 1',
+        'sh', binding.acpSessionId,
+      ], { timeoutMs: 5000, maxOutputBytes: 4096 })
+      const line = result.stdout.trim().split('\n')[0] ?? ''
+      return line.length > 0 ? line : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  async #revisionChanged(binding: CcwSessionBinding): Promise<boolean> {
+    if (binding.revision === undefined) return false
+    const current = await this.#readRevision(binding)
+    return current !== undefined && current !== binding.revision
+  }
+
+  /** Drop the console's translated stream so a reload starts from seq 0. */
+  #resetStream(dshSessionId: string): void {
+    this.#buffers.delete(dshSessionId)
+    this.#translators.delete(dshSessionId)
+    this.#translatorAcp.delete(dshSessionId)
+    this.#sequences.set(dshSessionId, 0)
+    this.#running.delete(dshSessionId)
+  }
+
+  /** Reload one binding's history into a clean console stream. */
+  async #reloadConsole(
+    client: AcpClient,
+    binding: CcwSessionBinding,
+    input: Pick<OpenSessionInput, 'model' | 'effort' | 'mode'>,
+  ): Promise<OpenSessionResult> {
+    this.#resetStream(binding.dshSessionId)
+    if (binding.acpSessionId !== undefined) {
+      this.#gate.expireAll('history refreshed', { sessionId: binding.acpSessionId })
+    }
+    await this.#load(client, binding)
+    const updated = await this.#applyOptions(await this.#requireBinding(binding.dshSessionId), input)
+    const cached = this.#sessionOptions.get(binding.dshSessionId)
+    return {
+      binding: updated,
+      resumed: true,
+      refreshed: true,
+      ...(cached?.modes === undefined ? {} : { modes: cached.modes }),
+      configOptions: cached?.configOptions ?? [],
+    }
+  }
+
+  /**
+   * Replay the current agent-side session log into the console.
+   *
+   * Use after an external CLI resumed the same Claude session, or to recover
+   * from a console that rendered stale history.
+   *
+   * @param dshSessionId - Bound console session.
+   * @returns the binding and replayed options; `refreshed` is true.
+   * @throws when no turn is allowed to be interrupted by a reload.
+   */
+  async refreshSession(dshSessionId: string): Promise<OpenSessionResult> {
+    const binding = await this.#requireBinding(dshSessionId)
+    const workspace = await this.#requireWorkspace(binding.workspaceId)
+    if (this.#runningOf(dshSessionId).running) {
+      throw new CcwError('turn-already-running', 'stop the current turn before refreshing history', { sessionId: dshSessionId })
+    }
+    const client = await this.#pool.acquire(workspace.id, workspace.hostId, workspace.dir)
+    try {
+      return await this.#reloadConsole(client, binding, {})
+    } finally {
+      this.#pool.release(workspace.id)
+    }
+  }
+
+  /**
+   * Stop the workspace's ACP process so another Claude client can resume.
+   *
+   * Bindings are kept and reloaded on the next open. A running turn is not
+   * interrupted: the release is refused instead.
+   *
+   * @param workspaceId - Workspace whose processes should stop.
+   * @returns whether the release happened, or why it was refused.
+   */
+  async releaseWorkspace(workspaceId: string): Promise<{ released: boolean; reason?: string }> {
+    await this.#requireWorkspace(workspaceId)
+    const bindings = (await this.#sessions.list()).filter((binding) => binding.workspaceId === workspaceId)
+    if (bindings.some((binding) => this.#runningOf(binding.dshSessionId).running)) {
+      return { released: false, reason: 'a turn is running' }
+    }
+    await this.#pool.close(workspaceId, 'requested')
+    for (const binding of bindings) {
+      await this.#sessions.update(binding.dshSessionId, { needsLoad: true }).catch(() => undefined)
+    }
+    this.#emit({ type: 'runtime', workspaceId, state: 'stopped' })
+    return { released: true }
+  }
+
   async #load(client: AcpClient, binding: CcwSessionBinding): Promise<void> {
     if (binding.acpSessionId === undefined) {
       throw new CcwError('session-load-failed', 'the binding has no ACP session id', { sessionId: binding.dshSessionId })
@@ -1027,7 +1144,11 @@ export class CcwService {
         configOptions: result.configOptions ?? previous?.configOptions ?? [],
       })
       await this.#reapplyOptions(client, binding)
-      await this.#sessions.update(binding.dshSessionId, { needsLoad: false })
+      const revision = await this.#readRevision(binding)
+      await this.#sessions.update(binding.dshSessionId, {
+        needsLoad: false,
+        ...(revision === undefined ? {} : { revision }),
+      })
       void translator
     } catch (error) {
       await this.#sessions.update(binding.dshSessionId, { needsLoad: true }).catch(() => undefined)
@@ -1049,7 +1170,10 @@ export class CcwService {
     if (binding.mode !== undefined) await this.#setConfig(client, binding.acpSessionId, 'mode', binding.mode)
   }
 
-  async #applyOptions(binding: CcwSessionBinding, input: OpenSessionInput): Promise<CcwSessionBinding> {
+  async #applyOptions(
+    binding: CcwSessionBinding,
+    input: Pick<OpenSessionInput, 'model' | 'effort' | 'mode'>,
+  ): Promise<CcwSessionBinding> {
     const patch: Partial<CcwSessionBinding> = {}
     if (input.model !== undefined && input.model !== binding.model) patch.model = input.model
     if (input.effort !== undefined && input.effort !== binding.effort) patch.effort = input.effort

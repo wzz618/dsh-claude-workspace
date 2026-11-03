@@ -162,6 +162,9 @@ export class AcpPool {
     this.#clearIdle(entry)
     this.#entries.delete(workspaceId)
     await entry.client.stop().catch(() => undefined)
+    // An intentional close is not a connection loss: the next open starts a
+    // fresh process and loads history instead of showing "disconnected".
+    this.#disconnected.delete(workspaceId)
     if (reason === 'idle') this.#options.onIdleClose?.(workspaceId)
   }
 

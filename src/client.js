@@ -105,6 +105,7 @@ window.__ModuleLoader__.load({
 			turnFinished: '回合结束',
 			sessionOpened: '会话已打开',
 			sessionReplaced: '原 Claude 会话无法恢复，已新建一个空会话',
+			historyRefreshed: '已加载最新历史',
 			diffTruncated: 'diff 过大，仅显示统计',
 			changedLines: '行变更',
 			attachFile: '@ 文件',
@@ -200,6 +201,7 @@ window.__ModuleLoader__.load({
 			turnFinished: 'Turn finished',
 			sessionOpened: 'Session opened',
 			sessionReplaced: 'The previous Claude session could not be restored; a new empty session was created',
+			historyRefreshed: 'Loaded the latest history',
 			diffTruncated: 'diff too large; showing counts only',
 			changedLines: 'line changes',
 			attachFile: '@ file',
@@ -1034,6 +1036,7 @@ window.__ModuleLoader__.load({
 				const [reviseText, setReviseText] = useState('')
 				const sinceRef = useRef(0)
 				const streamRef = useRef(null)
+				const liveRef = useRef({ workspaceId: '', opened: false })
 
 				const refreshCatalog = useCallback(async () => {
 					try {
@@ -1052,6 +1055,16 @@ window.__ModuleLoader__.load({
 				}, [])
 
 				useEffect(() => { void refreshCatalog() }, [refreshCatalog])
+				useEffect(() => () => {
+					const current = liveRef.current
+					if (!current.opened || !current.workspaceId) return
+					void fetch(`${BASE}/sessions/release`, {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ workspaceId: current.workspaceId }),
+						keepalive: true,
+					}).catch(() => undefined)
+				}, [])
 				useEffect(() => {
 					if (!workspaceId || sessionId) return
 					setSessionId(`ccw-${workspaceId}`)
@@ -1109,7 +1122,9 @@ window.__ModuleLoader__.load({
 				const openSession = () => run(async () => {
 					const result = await post('/sessions/open', { workspaceId, dshSessionId: sessionId })
 					setOpened(true)
-					setNotice(result.replaced === true ? t('sessionReplaced') : t('sessionOpened'))
+					setNotice(result.replaced === true
+						? t('sessionReplaced')
+						: result.refreshed === true ? t('historyRefreshed') : t('sessionOpened'))
 					sinceRef.current = 0
 					setEvents([])
 					setPending([])
@@ -1182,13 +1197,31 @@ window.__ModuleLoader__.load({
 							: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
 						if (shape !== null && shape !== undefined) setOptions(shape)
 						setOpened(true)
-						setNotice(result.replaced === true ? t('sessionReplaced') : t('sessionOpened'))
+						setNotice(result.replaced === true
+						? t('sessionReplaced')
+						: result.refreshed === true ? t('historyRefreshed') : t('sessionOpened'))
 					} catch (failure) {
 						setError(failure.message)
 					} finally {
 						setReconnecting(false)
 					}
 				}
+
+				const refreshHistory = () => run(async () => {
+					const result = await post('/sessions/refresh', { dshSessionId: sessionId })
+					sinceRef.current = 0
+					setEvents([])
+					setPending([])
+					setPlan(null)
+					setPreviews({})
+					setOpened(true)
+					const shape = result.configOptions && result.configOptions.length > 0
+						? { modes: result.modes, configOptions: result.configOptions }
+						: (await call(`/sessions/options?dshSessionId=${encodeURIComponent(sessionId)}`)).options
+					if (shape !== null && shape !== undefined) setOptions(shape)
+					setNotice(t('historyRefreshed'))
+					await refreshCatalog()
+				})
 
 				const addImages = async (fileList) => {
 					setImageError('')
@@ -1282,6 +1315,7 @@ window.__ModuleLoader__.load({
 				// SSH workspaces are supported too; the Host reports a missing
 				// probeCwd as an actionable error when the button is used.
 				const canCreateNative = Boolean(native && native.available)
+				liveRef.current = { workspaceId, opened }
 				const boundSession = bindings.find((binding) => binding.dshSessionId === sessionId)
 				const showResume = needsResume(runtime, running, boundSession !== undefined)
 				const groups = groupEvents(events)
@@ -1462,7 +1496,11 @@ window.__ModuleLoader__.load({
 									children: reconnecting ? t('reconnecting') : t('reconnect'),
 								})
 								: null,
-							h('button', { style: styles.button, onClick: () => void refreshCatalog(), children: t('refresh') }),
+							h('button', {
+								style: styles.button,
+								onClick: () => { if (opened && sessionId) void refreshHistory(); else void refreshCatalog() },
+								children: t('refresh'),
+							}),
 						].filter(Boolean) }),
 						h('div', { style: styles.panelRow, children: [
 							h('span', { style: styles.muted, children: t('openWorkspace') }),

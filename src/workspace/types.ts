@@ -45,6 +45,8 @@ export interface CcwSessionBinding {
   lastEventSeq: number
   /** True when the binding exists but its ACP session must be loaded again. */
   needsLoad: boolean
+  /** Opaque revision of the agent's on-disk session log at our last write. */
+  revision?: string
 }
 
 /** On-disk shape of `workspaces.json`. */

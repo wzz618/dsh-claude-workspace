@@ -376,3 +376,76 @@ test('a session with a completed turn still reports a reload failure', async () 
     await context.cleanup()
   }
 })
+
+test('refreshing a session replays the agent history from scratch', async () => {
+  const context = await setup('perm')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'create a.txt' })
+    const pending = await waitFor(() => context.service.pendingApprovals('dsh-1')[0])
+    await context.service.answerPermission(pending.requestId, 'allow-once')
+    await prompt
+    const before = context.events.length
+
+    const refreshed = await context.service.refreshSession('dsh-1')
+    assert.equal(refreshed.refreshed, true)
+    assert.equal(refreshed.resumed, true)
+    const replayed = context.events.slice(before)
+    assert.ok(replayed.some((event) => event.type === 'assistant-text' && event.text.includes('previous answer')))
+    assert.ok(replayed.some((event) => event.type === 'tool-call' && event.card.toolCallId === 't-old'))
+    const reattach = await context.service.reattach('dsh-1')
+    assert.equal(reattach.state, 'ready')
+    assert.ok(reattach.events.length > 0)
+    assert.ok(reattach.events.every((entry) => entry.event.replay === true))
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('releasing a workspace stops its process and keeps the binding for reload', async () => {
+  const context = await setup('perm')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const released = await context.service.releaseWorkspace(context.workspaceId)
+    assert.deepEqual(released, { released: true })
+    const stopped = await context.service.reattach('dsh-1')
+    assert.equal(stopped.state, 'stopped')
+    assert.equal(stopped.binding?.needsLoad, true)
+
+    const reopened = await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    assert.equal(reopened.resumed, true)
+    assert.equal((await context.service.reattach('dsh-1')).state, 'ready')
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('release refuses while a turn is running', async () => {
+  const context = await setup('slow')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'slow work' })
+    await waitForAsync(async () => (await context.service.reattach('dsh-1')).running ? true : undefined)
+    const released = await context.service.releaseWorkspace(context.workspaceId)
+    assert.equal(released.released, false)
+    assert.match(released.reason ?? '', /turn is running/)
+    await context.service.cancelSession('dsh-1')
+    await prompt
+  } finally {
+    await context.cleanup()
+  }
+})
+
+test('refresh refuses while a turn is running', async () => {
+  const context = await setup('slow')
+  try {
+    await context.service.openSession({ workspaceId: context.workspaceId, dshSessionId: 'dsh-1' })
+    const prompt = context.service.prompt({ dshSessionId: 'dsh-1', text: 'slow work' })
+    await waitForAsync(async () => (await context.service.reattach('dsh-1')).running ? true : undefined)
+    await assert.rejects(context.service.refreshSession('dsh-1'), /stop the current turn/)
+    await context.service.cancelSession('dsh-1')
+    await prompt
+  } finally {
+    await context.cleanup()
+  }
+})

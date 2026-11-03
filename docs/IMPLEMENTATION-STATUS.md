@@ -108,6 +108,13 @@
 
 ## P3b 断线与重连（2026-11-01）
 
+- **外部历史检测**：绑定新增 `revision`（agent 侧 `<session-id>.jsonl` 的 mtime+size）。
+  每次回合结束、`session/load` 后记录；进入控制台时若远端文件变化，则清空控制台回放流并
+  重新 `session/load`（`refreshed:true`，提示「已加载最新历史」）
+- **手动刷新**：`POST /sessions/refresh` 强制重放；回合运行中拒绝
+- **关闭标签释放**：`POST /sessions/release` 停止工作区 ACP 进程并把绑定标为 `needsLoad`；
+  控制台组件卸载（关闭 `Claude Code` 标签）时用 `keepalive` 请求触发；有回合运行时拒绝
+
 - 连接关闭时：池标记 workspace `disconnected`，该 workspace 的待审批请求全部标 `expired` 并写审计（`expired:connection closed`），不自动重放未确认的 prompt
 - 新增 `CcwService.reconnectSession()` 与 `POST /sessions/reconnect`：关闭旧进程、启动新进程、`session/load` 回放，再恢复绑定的 model/effort/mode
 - 客户端：状态为 `disconnected` 时显示「重连」按钮，重连后从 seq 0 重新拉取回放事件；断线期间 composer 禁用
